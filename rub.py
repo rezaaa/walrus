@@ -46,6 +46,10 @@ class CancelledTaskError(RuntimeError):
     pass
 
 
+class FilenameFallbackRequired(RuntimeError):
+    pass
+
+
 def remove_extension(name: str) -> str:
     if "." in name:
         name = name.rsplit(".", 1)[0]
@@ -148,6 +152,24 @@ def is_transient_upload_error(error_text: str) -> bool:
     )
 
 
+def should_use_extensionless_fallback(
+    *,
+    media_type: str,
+    file_name: str,
+    error_text: str,
+) -> bool:
+    has_extension = Path(file_name).suffix != ""
+    if not has_extension:
+        return False
+
+    lowered = error_text.lower()
+    is_chunk_error = "error uploading chunk" in lowered
+    if media_type == "document" and is_chunk_error:
+        return True
+
+    return not should_keep_extension(file_name)
+
+
 def wait_with_cancel(task_id: str, seconds: int) -> None:
     for _ in range(seconds):
         if is_cancelled(task_id):
@@ -201,6 +223,7 @@ def send_with_retry(
     file_name: str | None = None,
 ):
     task_id = task.get("task_id", "")
+    media_type = task.get("media_type", "")
     last_error = None
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -230,18 +253,29 @@ def send_with_retry(
         except Exception as e:
             last_error = e
             error_text = str(e).lower()
+            effective_file_name = file_name or Path(file_path).name
+
+            if should_use_extensionless_fallback(
+                media_type=media_type,
+                file_name=effective_file_name,
+                error_text=error_text,
+            ):
+                raise FilenameFallbackRequired(str(e)) from e
+
             transient = is_transient_upload_error(error_text)
 
             if transient and attempt < MAX_RETRIES:
                 delay = RETRY_DELAY * attempt
+                next_attempt_text = f"{attempt + 1} از {MAX_RETRIES}"
                 task["upload_percent"] = 0
+                task["attempt_text"] = next_attempt_text
                 save_processing(task)
                 update_telegram_status(
                     task,
                     stage="خطای موقت در آپلود",
                     upload_status="آپلود موقتا قطع شد",
-                    note=f"{delay} ثانیه دیگر دوباره تلاش می‌شود.",
-                    attempt_text=task["attempt_text"],
+                    note=f"تلاش {attempt} ناموفق بود. {delay} ثانیه دیگر تلاش بعدی شروع می‌شود.",
+                    attempt_text=next_attempt_text,
                 )
                 wait_with_cancel(task_id, delay)
                 continue
@@ -258,6 +292,7 @@ def process_task(task: dict) -> None:
 
     task_id = task.get("task_id", "")
     caption = task.get("caption", "")
+    media_type = task.get("media_type", "")
     original_path = Path(task.get("path", ""))
     if not original_path.exists():
         raise RuntimeError("Local file not found.")
@@ -283,10 +318,31 @@ def process_task(task: dict) -> None:
             send_with_retry(task, str(send_path), caption, file_name=send_name)
         except CancelledTaskError:
             raise
+        except FilenameFallbackRequired as e:
+            fallback_name = remove_extension(send_name)
+            if fallback_name == send_name:
+                raise RuntimeError(str(e)) from e
+
+            task["upload_percent"] = 0
+            task["file_name"] = fallback_name
+            task["attempt_text"] = None
+            save_processing(task)
+            update_telegram_status(
+                task,
+                stage="تلاش دوباره با نام سازگار",
+                upload_status="نام فایل برای روبیکا تنظیم شد",
+                note="ارسال با نام اصلی خطا داد و حالا بدون پسوند دوباره تلاش می‌شود.",
+            )
+            send_name = fallback_name
+            send_with_retry(task, str(send_path), caption, file_name=send_name)
         except Exception:
             fallback_name = remove_extension(send_name)
             needs_fallback = (
-                fallback_name != send_name and not should_keep_extension(send_name)
+                fallback_name != send_name
+                and (
+                    media_type == "document"
+                    or not should_keep_extension(send_name)
+                )
             )
             if not needs_fallback:
                 raise
