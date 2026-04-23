@@ -2,6 +2,12 @@
 
 Send a video to a Telegram bot and have it uploaded to your Rubika Saved Messages.
 
+## Disclaimer
+
+This project is shared for research, learning, and personal experimentation.
+Do not use it for abuse, spam, unauthorized access, privacy violations, or any harmful or unlawful purpose.
+You are responsible for using it in a way that respects platform rules, local laws, and other people's rights.
+
 Tele2Rub uses a simple queue-based flow:
 
 1. The Telegram bot receives a video in a private chat.
@@ -168,7 +174,7 @@ Ctrl + A, then D
 Useful commands:
 
 - `screen -ls`
-- `screen -r tele2rub`
+- `screen -r tele2rub` - attach to the running session
 - `screen -S tele2rub -X quit`
 
 If multiple old sessions exist:
@@ -200,6 +206,36 @@ Then verify:
 
 ```bash
 screen -ls
+```
+
+Optional update script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="/opt/Tele2Rub"
+BRANCH="main"
+SCREEN_NAME="tele2rub"
+
+echo "==> Updating code"
+cd "$APP_DIR"
+git pull --ff-only origin "$BRANCH"
+
+echo "==> Installing dependencies"
+"$APP_DIR/venv/bin/python" -m pip install -r requirements.txt
+
+echo "==> Stopping old screen sessions"
+for s in $(screen -ls | awk '/tele2rub/ {print $1}'); do
+  screen -S "$s" -X quit || true
+done
+
+echo "==> Starting app in screen"
+screen -dmS "$SCREEN_NAME" bash -lc "cd '$APP_DIR' && exec '$APP_DIR/venv/bin/python' main.py"
+
+echo "==> Done"
+echo "Check sessions with: screen -ls"
+echo "Attach to session with: screen -r $SCREEN_NAME"
 ```
 
 ## Project Files
