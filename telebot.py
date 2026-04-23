@@ -6,7 +6,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pyrogram import Client, enums, filters
-from pyrogram.types import BotCommand, KeyboardButton, Message, ReplyKeyboardMarkup
+from pyrogram.types import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from task_store import (
     DOWNLOAD_DIR,
@@ -53,28 +61,24 @@ COMMANDS_READY = False
 BTN_STATUS = "📊 وضعیت"
 BTN_TRANSFERS = "📋 انتقال‌ها"
 BTN_CLEANUP = "🧹 پاکسازی"
-BTN_HELP = "ℹ️ راهنما"
 BTN_CANCEL = "🛑 لغو"
-MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_HELP, BTN_CANCEL}
+MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_CANCEL}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_TRANSFERS)],
-        [KeyboardButton(BTN_CLEANUP), KeyboardButton(BTN_HELP)],
-        [KeyboardButton(BTN_CANCEL)],
+        [KeyboardButton(BTN_CLEANUP), KeyboardButton(BTN_CANCEL)],
     ],
     resize_keyboard=True,
 )
 
 BOT_COMMANDS = [
     BotCommand("start", "باز کردن منو"),
-    BotCommand("menu", "نمایش منوی اصلی"),
     BotCommand("status", "وضعیت صف و فضای دانلود"),
     BotCommand("transfers", "لیست انتقال‌های فعال و صف"),
     BotCommand("retry", "تلاش دوباره انتقال ناموفق"),
     BotCommand("cleanup", "پاکسازی امن پوشه دانلود"),
     BotCommand("cancel", "لغو یک انتقال"),
-    BotCommand("help", "راهنما"),
 ]
 MENU_BUTTON_FILTER = filters.create(
     lambda _filter, _client, message: (message.text or "").strip() in MENU_BUTTONS
@@ -103,7 +107,7 @@ def build_menu_text() -> str:
             "📋 <b>انتقال‌ها</b> - لیست کارهای فعال و منتظر",
             "🔁 <b>تلاش دوباره</b> - /retry <code>task_id</code>",
             "🧹 <b>پاکسازی</b> - حذف فایل‌های اضافه از downloads",
-            "🛑 <b>لغو</b> - ریپلای روی پیام وضعیت یا /cancel <code>task_id</code>",
+            "🛑 <b>لغو</b> - /cancel برای انتخاب از لیست",
         ]
     )
 
@@ -167,14 +171,90 @@ def cleanup_candidates() -> list[Path]:
     return candidates
 
 
-def compact_task_line(prefix: str, task: dict, detail: str = "") -> str:
+def compact_task_card(prefix: str, task: dict, status: str = "") -> str:
     task_id = task.get("task_id", "-")
     file_name = Path(task.get("file_name") or task.get("path") or "video").name
     stem, suffix = split_name(file_name)
-    display_name = safe_filename(f"{stem[:22]}{suffix}", "video")
+    display_name = safe_filename(f"{stem[:30]}{suffix}", "video")
     size = human_size(int(task.get("file_size", 0) or 0))
-    detail_text = f" - {detail}" if detail else ""
-    return f"{prefix} <code>{task_id}</code> - {display_name} ({size}){detail_text}"
+    lines = [
+        f"{prefix} <code>{task_id}</code>",
+        f"🎞 {display_name}",
+        f"📦 {size}",
+    ]
+
+    if status:
+        lines.append(status)
+
+    return "\n".join(lines)
+
+
+def compact_button_label(prefix: str, task: dict) -> str:
+    task_id = task.get("task_id", "-")
+    file_name = Path(task.get("file_name") or task.get("path") or "video").name
+    stem, suffix = split_name(file_name)
+    display_name = safe_filename(f"{stem[:18]}{suffix}", "video")
+    return f"{prefix} {display_name} - {task_id}"
+
+
+def cancellable_tasks() -> list[tuple[str, dict]]:
+    tasks: list[tuple[str, dict]] = []
+
+    for active in ACTIVE_DOWNLOADS.values():
+        tasks.append(("⬇️", active))
+
+    processing_task = load_processing()
+    if processing_task:
+        tasks.append(("🚀", processing_task))
+
+    for task in read_queue_tasks():
+        tasks.append(("⏳", task))
+
+    return tasks
+
+
+def build_cancel_keyboard() -> InlineKeyboardMarkup | None:
+    rows = []
+
+    for prefix, task in cancellable_tasks()[:12]:
+        task_id = task.get("task_id")
+        if not task_id:
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    compact_button_label(prefix, task),
+                    callback_data=f"cancel:{task_id}",
+                )
+            ]
+        )
+
+    if not rows:
+        return None
+
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_cancel_picker(message: Message) -> None:
+    keyboard = build_cancel_keyboard()
+    if not keyboard:
+        await message.reply_text(
+            "🛑 انتقال فعالی برای لغو وجود ندارد.",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return
+
+    await message.reply_text(
+        "\n".join(
+            [
+                "<b>🛑 لغو انتقال</b>",
+                "",
+                "یکی از انتقال‌های زیر را انتخاب کن:",
+            ]
+        ),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=keyboard,
+    )
 
 
 def build_status_summary() -> str:
@@ -212,22 +292,24 @@ def build_transfers_summary() -> str:
     if ACTIVE_DOWNLOADS:
         lines.append("<b>⬇️ در حال دریافت</b>")
         for active in list(ACTIVE_DOWNLOADS.values())[:5]:
-            detail = f"{active.get('download_percent', 0)}%"
-            lines.append(compact_task_line("•", active, detail))
+            status = f"⬇️ {active.get('download_percent', 0)}%"
+            lines.append(compact_task_card("•", active, status))
+            lines.append("")
         lines.append("")
 
     if processing:
         lines.append("<b>🚀 در حال ارسال</b>")
-        detail = f"{processing.get('upload_percent', 0)}%"
+        status = f"⬆️ {processing.get('upload_percent', 0)}%"
         if processing.get("attempt_text"):
-            detail += f" / تلاش {processing['attempt_text']}"
-        lines.append(compact_task_line("•", processing, detail))
+            status += f"\n🔁 تلاش {processing['attempt_text']}"
+        lines.append(compact_task_card("•", processing, status))
         lines.append("")
 
     if queued:
         lines.append("<b>⏳ صف ارسال</b>")
         for index, task in enumerate(queued[:8], start=1):
-            lines.append(compact_task_line(f"{index}.", task))
+            lines.append(compact_task_card(f"{index}.", task))
+            lines.append("")
         if len(queued) > 8:
             lines.append(f"… و {len(queued) - 8} مورد دیگر")
         lines.append("")
@@ -242,7 +324,9 @@ def build_transfers_summary() -> str:
     if retryable_failed:
         lines.append("<b>❌ ناموفق قابل تلاش دوباره</b>")
         for task in retryable_failed[:5]:
-            lines.append(compact_task_line("•", task, "برای تلاش دوباره: /retry"))
+            task_id = task.get("task_id", "-")
+            lines.append(compact_task_card("•", task, f"🔁 /retry {task_id}"))
+            lines.append("")
         if len(retryable_failed) > 5:
             lines.append(f"… و {len(retryable_failed) - 5} مورد دیگر")
         lines.append("")
@@ -342,6 +426,63 @@ async def edit_status_by_task(client: Client, task: dict, text: str) -> None:
         pass
 
 
+async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> None:
+    active = ACTIVE_DOWNLOADS.get(task_id)
+    if active:
+        active["cancelled"] = True
+        text = build_status_text(
+            task_id=task_id,
+            file_name=active["file_name"],
+            file_size=active["file_size"],
+            stage="🛑 در حال لغو",
+            download_percent=active.get("download_percent", 0),
+            upload_percent=active.get("upload_percent", 0),
+            upload_status="انتقال متوقف می‌شود.",
+        )
+        await edit_status_by_task(client, active, text)
+        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        return
+
+    queued_task = remove_queued_task(task_id)
+    if queued_task:
+        cleanup_download_artifact(queued_task.get("path", ""))
+        text = build_status_text(
+            task_id=task_id,
+            file_name=queued_task.get("file_name", Path(queued_task.get("path", "")).name or "file"),
+            file_size=int(queued_task.get("file_size", 0)),
+            stage="🛑 لغو شد",
+            download_percent=100,
+            upload_percent=0,
+            upload_status="از صف حذف شد.",
+        )
+        await edit_status_by_task(client, queued_task, text)
+        await message.reply_text(f"🗑 از صف حذف شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        return
+
+    processing_task = load_processing()
+    if processing_task and processing_task.get("task_id") == task_id:
+        mark_cancelled(task_id)
+        text = build_status_text(
+            task_id=task_id,
+            file_name=processing_task.get("file_name", Path(processing_task.get("path", "")).name or "file"),
+            file_size=int(processing_task.get("file_size", 0)),
+            stage="🛑 در حال لغو",
+            download_percent=100,
+            upload_percent=int(processing_task.get("upload_percent", 0)),
+            upload_status="بعد از پایان بخش فعلی متوقف می‌شود.",
+            attempt_text=processing_task.get("attempt_text"),
+        )
+        await edit_status_by_task(client, processing_task, text)
+        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        return
+
+    if is_cancelled(task_id):
+        await message.reply_text(f"🛑 قبلا لغو شده: {task_id}", reply_markup=MENU_KEYBOARD)
+        return
+
+    await message.reply_text(f"🔎 شناسه پیدا نشد: {task_id}", reply_markup=MENU_KEYBOARD)
+
+
 def resolve_task_from_reply(status_message_id: int | None) -> tuple[str | None, dict | None]:
     if status_message_id is None:
         return None, None
@@ -420,22 +561,6 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
 async def start_handler(client: Client, message: Message):
     await ensure_bot_commands(client)
     await send_menu(message)
-
-
-@app.on_message(filters.private & filters.command("menu"))
-async def menu_handler(client: Client, message: Message):
-    await ensure_bot_commands(client)
-    await send_menu(message)
-
-
-@app.on_message(filters.private & filters.command("help"))
-async def help_handler(client: Client, message: Message):
-    await ensure_bot_commands(client)
-    await message.reply_text(
-        build_menu_text(),
-        parse_mode=enums.ParseMode.HTML,
-        reply_markup=MENU_KEYBOARD,
-    )
 
 
 @app.on_message(filters.private & filters.command("status"))
@@ -576,82 +701,37 @@ async def menu_button_handler(client: Client, message: Message):
         await transfers_handler(client, message)
     elif text == BTN_CLEANUP:
         await cleanup_handler(client, message)
-    elif text == BTN_HELP:
-        await help_handler(client, message)
     elif text == BTN_CANCEL:
-        await message.reply_text(
-            "🛑 برای لغو، روی پیام وضعیت ریپلای کن یا /cancel <task_id> بزن.",
-            reply_markup=MENU_KEYBOARD,
-        )
+        await send_cancel_picker(message)
+
+
+@app.on_callback_query(filters.regex(r"^cancel:"))
+async def cancel_callback_handler(client: Client, callback_query: CallbackQuery):
+    task_id = (callback_query.data or "").split(":", 1)[1].strip()
+    await callback_query.answer("درخواست لغو ثبت شد.")
+
+    try:
+        await callback_query.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await cancel_task_by_id(client, callback_query.message, task_id)
 
 
 @app.on_message(filters.private & filters.command("cancel"))
 async def cancel_handler(client: Client, message: Message):
     task_id = None
-    if len(message.command) > 1:
+    if message.command and len(message.command) > 1:
         task_id = message.command[1].strip()
 
     if not task_id and message.reply_to_message:
         task_id, _ = resolve_task_from_reply(message.reply_to_message.id)
 
     if not task_id:
-        await message.reply_text("🛑 برای لغو، روی پیام وضعیت ریپلای کن یا /cancel <task_id> بزن.")
+        await send_cancel_picker(message)
         return
 
-    active = ACTIVE_DOWNLOADS.get(task_id)
-    if active:
-        active["cancelled"] = True
-        text = build_status_text(
-            task_id=task_id,
-            file_name=active["file_name"],
-            file_size=active["file_size"],
-            stage="🛑 در حال لغو",
-            download_percent=active.get("download_percent", 0),
-            upload_percent=active.get("upload_percent", 0),
-            upload_status="انتقال متوقف می‌شود.",
-        )
-        await edit_status_by_task(client, active, text)
-        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}")
-        return
-
-    queued_task = remove_queued_task(task_id)
-    if queued_task:
-        cleanup_download_artifact(queued_task.get("path", ""))
-        text = build_status_text(
-            task_id=task_id,
-            file_name=queued_task.get("file_name", Path(queued_task.get("path", "")).name or "file"),
-            file_size=int(queued_task.get("file_size", 0)),
-            stage="🛑 لغو شد",
-            download_percent=100,
-            upload_percent=0,
-            upload_status="از صف حذف شد.",
-        )
-        await edit_status_by_task(client, queued_task, text)
-        await message.reply_text(f"🗑 از صف حذف شد: {task_id}")
-        return
-
-    processing_task = load_processing()
-    if processing_task and processing_task.get("task_id") == task_id:
-        mark_cancelled(task_id)
-        text = build_status_text(
-            task_id=task_id,
-            file_name=processing_task.get("file_name", Path(processing_task.get("path", "")).name or "file"),
-            file_size=int(processing_task.get("file_size", 0)),
-            stage="🛑 در حال لغو",
-            download_percent=100,
-            upload_percent=int(processing_task.get("upload_percent", 0)),
-            upload_status="بعد از پایان بخش فعلی متوقف می‌شود.",
-            attempt_text=processing_task.get("attempt_text"),
-        )
-        await edit_status_by_task(client, processing_task, text)
-        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}")
-        return
-
-    if is_cancelled(task_id):
-        await message.reply_text(f"🛑 قبلا لغو شده: {task_id}")
-        return
-
-    await message.reply_text(f"🔎 شناسه پیدا نشد: {task_id}")
+    await cancel_task_by_id(client, message, task_id)
 
 
 @app.on_message(
