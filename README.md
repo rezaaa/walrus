@@ -8,6 +8,10 @@ This project is shared for research, learning, and personal experimentation.
 Do not use it for abuse, spam, unauthorized access, privacy violations, or any harmful or unlawful purpose.
 You are responsible for using it in a way that respects platform rules, local laws, and other people's rights.
 
+## Inspiration
+
+This project was originally inspired by [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub).
+
 Walrus uses a simple queue-based flow:
 
 1. The Telegram bot receives a video in a private chat.
