@@ -99,27 +99,22 @@ def build_status_text(
 
     lines = [
         "<b>🎬 Tele2Rub</b>",
-        f"<b>{safe_stage}</b>",
-        f"{safe_upload_status}",
+        f"📍 <b>Status:</b> {safe_stage}",
+        f"📝 <b>Note:</b> {safe_upload_status}",
         "",
-        "🎞 <b>ویدیو</b>",
-        ltr_code(safe_file_name),
-        "📦 <b>حجم</b>",
-        ltr_code(safe_size),
-        "🆔 <b>کد</b>",
-        ltr_code(safe_task_id),
+        f"🎞 <b>Video:</b> {ltr_code(safe_file_name)}",
+        f"📦 <b>Size:</b> {ltr_code(safe_size)}",
+        f"🆔 <b>ID:</b> {ltr_code(safe_task_id)}",
         "",
-        "⬇️ <b>دریافت</b>",
-        f"{ltr_code(progress_meter(download_value))} {ltr_code(f'{download_value}%')}",
-        "⬆️ <b>ارسال</b>",
-        f"{ltr_code(progress_meter(upload_value))} {ltr_code(f'{upload_value}%')}",
+        f"⬇️ <b>Download:</b> {ltr_code(progress_meter(download_value))} {ltr_code(f'{download_value}%')}",
+        f"⬆️ <b>Upload:</b> {ltr_code(progress_meter(upload_value))} {ltr_code(f'{upload_value}%')}",
     ]
 
     if attempt_text:
-        lines.extend(["🔁 <b>تلاش</b>", ltr_code(attempt_text)])
+        lines.append(f"🔁 <b>Attempt:</b> {ltr_code(attempt_text)}")
 
     if queue_position is not None:
-        lines.extend(["⏳ <b>صف</b>", ltr_code(str(queue_position))])
+        lines.append(f"⏳ <b>Queue:</b> {ltr_code(str(queue_position))}")
 
     if note:
         lines.append(escape(note))

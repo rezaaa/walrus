@@ -106,7 +106,7 @@ def update_telegram_status(
 
     task_id = task.get("task_id", "")
     if action and task_id:
-        label = "🔁 تلاش دوباره" if action == "retry" else "🛑 لغو"
+        label = "🔁 Retry" if action == "retry" else "🛑 Cancel"
         payload["reply_markup"] = {
             "inline_keyboard": [
                 [{"text": label, "callback_data": f"{action}:{task_id}"}]
@@ -194,12 +194,12 @@ def make_upload_progress_callback(task: dict, attempt: int):
         state["last_percent"] = percent
         state["last_update"] = now
         task["upload_percent"] = percent
-        task["attempt_text"] = f"{attempt} از {MAX_RETRIES}"
+        task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
         save_processing(task)
         update_telegram_status(
             task,
-            stage="🚀 در حال ارسال",
-            upload_status="ویدیو در حال ارسال به روبیکا است.",
+            stage="🚀 Uploading",
+            upload_status="Sending video to Rubika.",
             attempt_text=task["attempt_text"],
         )
 
@@ -220,12 +220,12 @@ def send_with_retry(
             raise CancelledTaskError("Cancelled by user.")
 
         task["upload_percent"] = 0
-        task["attempt_text"] = f"{attempt} از {MAX_RETRIES}"
+        task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
         save_processing(task)
         update_telegram_status(
             task,
-            stage="🚀 شروع ارسال",
-            upload_status="اتصال با روبیکا برقرار می‌شود.",
+            stage="🚀 Starting Upload",
+            upload_status="Connecting to Rubika.",
             attempt_text=task["attempt_text"],
         )
 
@@ -249,7 +249,7 @@ def send_with_retry(
 
             last_error = e
             error_text = str(e).lower()
-            task["attempt_text"] = f"{attempt} از {MAX_RETRIES}"
+            task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
             normalize_failed_progress(task)
             save_processing(task)
 
@@ -257,14 +257,14 @@ def send_with_retry(
 
             if transient and attempt < MAX_RETRIES:
                 delay = RETRY_DELAY * attempt
-                next_attempt_text = f"{attempt + 1} از {MAX_RETRIES}"
+                next_attempt_text = f"{attempt + 1} of {MAX_RETRIES}"
                 task["upload_percent"] = 0
                 task["attempt_text"] = next_attempt_text
                 save_processing(task)
                 update_telegram_status(
                     task,
-                    stage="⚠️ تلاش دوباره",
-                    upload_status=f"تلاش {attempt} ناموفق بود. تلاش بعدی تا {delay} ثانیه دیگر.",
+                    stage="⚠️ Retrying",
+                    upload_status=f"Attempt {attempt} failed. Next retry in {delay}s.",
                     attempt_text=next_attempt_text,
                 )
                 wait_with_cancel(task_id, delay)
@@ -295,8 +295,8 @@ def process_task(task: dict) -> None:
 
         update_telegram_status(
             task,
-            stage="📤 نوبت ارسال",
-            upload_status="ویدیو برای ارسال آماده می‌شود.",
+            stage="📤 Upload Queue",
+            upload_status="Preparing the video for upload.",
         )
 
         task["file_name"] = send_name
@@ -308,8 +308,8 @@ def process_task(task: dict) -> None:
         clear_cancelled(task_id)
         update_telegram_status(
             task,
-            stage="🛑 لغو شد",
-            upload_status="انتقال متوقف شد.",
+            stage="🛑 Cancelled",
+            upload_status="Transfer stopped.",
             attempt_text=task.get("attempt_text"),
             action=None,
         )
@@ -324,8 +324,8 @@ def process_task(task: dict) -> None:
     save_processing(task)
     update_telegram_status(
         task,
-        stage="✅ ارسال شد",
-        upload_status="ویدیو با موفقیت ارسال شد.",
+        stage="✅ Uploaded",
+        upload_status="Video uploaded successfully.",
         attempt_text=task.get("attempt_text"),
         action=None,
     )
@@ -351,21 +351,21 @@ def worker_loop():
             clear_cancelled(processing_task.get("task_id", ""))
             update_telegram_status(
                 processing_task,
-                stage="🛑 لغو شد",
-                upload_status="انتقال متوقف شد.",
+                stage="🛑 Cancelled",
+                upload_status="Transfer stopped.",
                 attempt_text=processing_task.get("attempt_text"),
                 action=None,
             )
         except Exception as e:
             processing_task = load_processing() or task
-            processing_task["attempt_text"] = f"{MAX_RETRIES} از {MAX_RETRIES}"
+            processing_task["attempt_text"] = f"{MAX_RETRIES} of {MAX_RETRIES}"
             normalize_failed_progress(processing_task)
             save_processing(processing_task)
             append_failed(processing_task, str(e))
             update_telegram_status(
                 processing_task,
-                stage="❌ ارسال ناموفق",
-                upload_status=f"پس از {MAX_RETRIES} تلاش ارسال نشد.",
+                stage="❌ Upload Failed",
+                upload_status=f"Failed after {MAX_RETRIES} attempts.",
                 attempt_text=processing_task.get("attempt_text"),
                 action="retry",
             )

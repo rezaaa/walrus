@@ -61,10 +61,10 @@ app = Client(
 ACTIVE_DOWNLOADS: dict[str, dict] = {}
 COMMANDS_READY = False
 
-BTN_STATUS = "📊 وضعیت"
-BTN_TRANSFERS = "📋 انتقال‌ها"
-BTN_CLEANUP = "🧹 پاکسازی"
-BTN_CANCEL = "🛑 لغو"
+BTN_STATUS = "📊 Status"
+BTN_TRANSFERS = "📋 Transfers"
+BTN_CLEANUP = "🧹 Cleanup"
+BTN_CANCEL = "🛑 Cancel"
 MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_CANCEL}
 
 MENU_KEYBOARD = ReplyKeyboardMarkup(
@@ -76,12 +76,12 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 BOT_COMMANDS = [
-    BotCommand("start", "باز کردن منو"),
-    BotCommand("status", "وضعیت صف و فضای دانلود"),
-    BotCommand("transfers", "لیست انتقال‌های فعال و صف"),
-    BotCommand("retry", "تلاش دوباره انتقال ناموفق"),
-    BotCommand("cleanup", "پاکسازی امن پوشه دانلود"),
-    BotCommand("cancel", "لغو یک انتقال"),
+    BotCommand("start", "Open the main menu"),
+    BotCommand("status", "Show queue and storage status"),
+    BotCommand("transfers", "List active and queued transfers"),
+    BotCommand("retry", "Retry a failed transfer"),
+    BotCommand("cleanup", "Clean safe download leftovers"),
+    BotCommand("cancel", "Cancel a transfer"),
 ]
 MENU_BUTTON_FILTER = filters.create(
     lambda _filter, _client, message: (message.text or "").strip() in MENU_BUTTONS
@@ -104,15 +104,13 @@ def build_menu_text() -> str:
     return "\n".join(
         [
             "<b>🎬 Tele2Rub</b>",
-            "ویدیو بفرست تا خودکار به پیام‌های ذخیره شده‌ی روبیکا ارسال شود.",
+            "📤 <b>Send a video</b> and I will upload it to Rubika Saved Messages.",
             "",
-            "📊 <b>وضعیت</b> - صف، انتقال فعال و فضای دانلود",
-            "📋 <b>انتقال‌ها</b> - لیست کارهای فعال و منتظر",
-            "🔁 <b>تلاش دوباره</b>",
-            ltr_code("/retry task_id"),
-            "🧹 <b>پاکسازی</b> - حذف فایل‌های اضافه از پوشه دانلود",
-            "🛑 <b>لغو</b>",
-            ltr_code("/cancel"),
+            f"📊 <b>Status:</b> {ltr_code('/status')}",
+            f"📋 <b>Transfers:</b> {ltr_code('/transfers')}",
+            f"🔁 <b>Retry:</b> {ltr_code('/retry task_id')}",
+            f"🧹 <b>Cleanup:</b> {ltr_code('/cleanup')}",
+            f"🛑 <b>Cancel:</b> {ltr_code('/cancel')}",
         ]
     )
 
@@ -183,9 +181,9 @@ def compact_task_card(prefix: str, task: dict, status: str = "") -> str:
     display_name = safe_filename(f"{stem[:30]}{suffix}", "video")
     size = human_size(int(task.get("file_size", 0) or 0))
     lines = [
-        f"{prefix} {ltr_code(task_id)}",
-        f"🎞 {ltr_code(display_name)}",
-        f"📦 {ltr_code(size)}",
+        f"{prefix} <b>ID:</b> {ltr_code(task_id)}",
+        f"🎞 <b>Video:</b> {ltr_code(display_name)}",
+        f"📦 <b>Size:</b> {ltr_code(size)}",
     ]
 
     if status:
@@ -242,9 +240,9 @@ def build_cancel_keyboard() -> InlineKeyboardMarkup | None:
 
 def status_action_keyboard(task_id: str, action: str = "cancel") -> InlineKeyboardMarkup:
     if action == "retry":
-        button = InlineKeyboardButton("🔁 تلاش دوباره", callback_data=f"retry:{task_id}")
+        button = InlineKeyboardButton("🔁 Retry", callback_data=f"retry:{task_id}")
     else:
-        button = InlineKeyboardButton("🛑 لغو", callback_data=f"cancel:{task_id}")
+        button = InlineKeyboardButton("🛑 Cancel", callback_data=f"cancel:{task_id}")
 
     return InlineKeyboardMarkup([[button]])
 
@@ -253,7 +251,7 @@ async def send_cancel_picker(message: Message) -> None:
     keyboard = build_cancel_keyboard()
     if not keyboard:
         await message.reply_text(
-            "🛑 انتقال فعالی برای لغو وجود ندارد.",
+            "🛑 There are no active transfers to cancel.",
             reply_markup=MENU_KEYBOARD,
         )
         return
@@ -261,9 +259,9 @@ async def send_cancel_picker(message: Message) -> None:
     await message.reply_text(
         "\n".join(
             [
-                "<b>🛑 لغو انتقال</b>",
+                "<b>🛑 Cancel Transfer</b>",
                 "",
-                "یکی از انتقال‌های زیر را انتخاب کن:",
+                "Choose one transfer:",
             ]
         ),
         parse_mode=enums.ParseMode.HTML,
@@ -279,27 +277,20 @@ def build_status_summary() -> str:
     candidates = cleanup_candidates()
 
     lines = [
-        "<b>📊 وضعیت Tele2Rub</b>",
+        "<b>📊 Tele2Rub Status</b>",
         "",
-        "⬇️ <b>دریافت فعال</b>",
-        ltr_code(str(len(ACTIVE_DOWNLOADS))),
-        "🚀 <b>ارسال فعال</b>",
-        ltr_code(str(1 if processing else 0)),
-        "⏳ <b>در صف</b>",
-        ltr_code(str(len(queued))),
-        "❌ <b>ناموفق</b>",
-        ltr_code(str(len(failed_entries))),
-        "📁 <b>فایل‌های دانلود</b>",
-        ltr_code(f"{len(files)} / {human_size(sum_file_sizes(files))}"),
-        "🧹 <b>قابل پاکسازی</b>",
-        ltr_code(f"{len(candidates)} / {human_size(sum_file_sizes(candidates))}"),
+        f"⬇️ <b>Active Downloads:</b> {ltr_code(str(len(ACTIVE_DOWNLOADS)))}",
+        f"🚀 <b>Active Uploads:</b> {ltr_code(str(1 if processing else 0))}",
+        f"⏳ <b>Queued:</b> {ltr_code(str(len(queued)))}",
+        f"❌ <b>Failed:</b> {ltr_code(str(len(failed_entries)))}",
+        f"📁 <b>Downloaded Files:</b> {ltr_code(f'{len(files)} / {human_size(sum_file_sizes(files))}')}",
+        f"🧹 <b>Cleanup Available:</b> {ltr_code(f'{len(candidates)} / {human_size(sum_file_sizes(candidates))}')}",
         "",
-        "برای جزئیات",
-        ltr_code("/transfers"),
+        f"📋 <b>Details:</b> {ltr_code('/transfers')}",
     ]
 
     if candidates:
-        lines.extend(["برای پاکسازی", ltr_code("/cleanup confirm")])
+        lines.append(f"🧹 <b>Confirm Cleanup:</b> {ltr_code('/cleanup confirm')}")
 
     return "\n".join(lines)
 
@@ -308,33 +299,33 @@ def build_transfers_summary() -> str:
     queued = read_queue_tasks()
     processing = load_processing()
     failed_entries = read_failed_entries()
-    lines = ["<b>📋 انتقال‌ها</b>", ""]
+    lines = ["<b>📋 Transfers</b>", ""]
 
     if ACTIVE_DOWNLOADS:
-        lines.append("<b>⬇️ در حال دریافت</b>")
+        lines.append("<b>⬇️ Downloading</b>")
         for active in list(ACTIVE_DOWNLOADS.values())[:5]:
             download_percent = active.get("download_percent", 0)
-            status = f"⬇️ {ltr_code(f'{download_percent}%')}"
+            status = f"⬇️ <b>Download:</b> {ltr_code(f'{download_percent}%')}"
             lines.append(compact_task_card("•", active, status))
             lines.append("")
         lines.append("")
 
     if processing:
-        lines.append("<b>🚀 در حال ارسال</b>")
+        lines.append("<b>🚀 Uploading</b>")
         upload_percent = processing.get("upload_percent", 0)
-        status = f"⬆️ {ltr_code(f'{upload_percent}%')}"
+        status = f"⬆️ <b>Upload:</b> {ltr_code(f'{upload_percent}%')}"
         if processing.get("attempt_text"):
-            status += f"\n🔁 <b>تلاش</b>\n{ltr_code(processing['attempt_text'])}"
+            status += f"\n🔁 <b>Attempt:</b> {ltr_code(processing['attempt_text'])}"
         lines.append(compact_task_card("•", processing, status))
         lines.append("")
 
     if queued:
-        lines.append("<b>⏳ صف ارسال</b>")
+        lines.append("<b>⏳ Upload Queue</b>")
         for index, task in enumerate(queued[:8], start=1):
             lines.append(compact_task_card(f"{index}.", task))
             lines.append("")
         if len(queued) > 8:
-            lines.append(f"… و {len(queued) - 8} مورد دیگر")
+            lines.append(f"... and {len(queued) - 8} more")
         lines.append("")
 
     retryable_failed = []
@@ -345,22 +336,20 @@ def build_transfers_summary() -> str:
             retryable_failed.append(task)
 
     if retryable_failed:
-        lines.append("<b>❌ ناموفق قابل تلاش دوباره</b>")
+        lines.append("<b>❌ Retryable Failed Transfers</b>")
         for task in retryable_failed[:5]:
             task_id = task.get("task_id", "-")
-            lines.append(compact_task_card("•", task, f"🔁 {ltr_code(f'/retry {task_id}')}"))
+            lines.append(compact_task_card("•", task, f"🔁 <b>Retry:</b> {ltr_code(f'/retry {task_id}')}"))
             lines.append("")
         if len(retryable_failed) > 5:
-            lines.append(f"… و {len(retryable_failed) - 5} مورد دیگر")
+            lines.append(f"... and {len(retryable_failed) - 5} more")
         lines.append("")
 
     if len(lines) == 2:
-        lines.append("فعلا انتقال فعالی وجود ندارد.")
+        lines.append("No active transfers right now.")
 
-    lines.append("🛑 <b>لغو</b>")
-    lines.append(ltr_code("/cancel task_id"))
-    lines.append("🔁 <b>تلاش دوباره</b>")
-    lines.append(ltr_code("/retry task_id"))
+    lines.append(f"🛑 <b>Cancel:</b> {ltr_code('/cancel task_id')}")
+    lines.append(f"🔁 <b>Retry:</b> {ltr_code('/retry task_id')}")
     return "\n".join(lines)
 
 
@@ -368,25 +357,22 @@ def build_cleanup_preview() -> str:
     candidates = cleanup_candidates()
     total_size = sum_file_sizes(candidates)
     lines = [
-        "<b>🧹 پاکسازی پوشه دانلود</b>",
+        "<b>🧹 Downloads Cleanup</b>",
         "",
-        "فایل قابل حذف",
-        ltr_code(str(len(candidates))),
-        "فضای قابل آزادسازی",
-        ltr_code(human_size(total_size)),
+        f"🗑 <b>Files to remove:</b> {ltr_code(str(len(candidates)))}",
+        f"💾 <b>Space to free:</b> {ltr_code(human_size(total_size))}",
     ]
 
     if candidates:
         lines.extend(
             [
                 "",
-                "این فایل‌ها در صف یا انتقال فعال نیستند.",
-                "برای تایید حذف بزن",
-                ltr_code("/cleanup confirm"),
+                "These files are not active, queued, or processing.",
+                f"✅ <b>Confirm cleanup:</b> {ltr_code('/cleanup confirm')}",
             ]
         )
     else:
-        lines.append("چیزی برای پاکسازی نیست.")
+        lines.append("Nothing to clean up.")
 
     return "\n".join(lines)
 
@@ -475,13 +461,13 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             task_id=task_id,
             file_name=active["file_name"],
             file_size=active["file_size"],
-            stage="🛑 در حال لغو",
+            stage="🛑 Cancelling",
             download_percent=active.get("download_percent", 0),
             upload_percent=active.get("upload_percent", 0),
-            upload_status="انتقال متوقف می‌شود.",
+            upload_status="Stopping the transfer.",
         )
         await edit_status_by_task(client, active, text)
-        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=MENU_KEYBOARD)
         return
 
     queued_task = remove_queued_task(task_id)
@@ -491,13 +477,13 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             task_id=task_id,
             file_name=queued_task.get("file_name", Path(queued_task.get("path", "")).name or "file"),
             file_size=int(queued_task.get("file_size", 0)),
-            stage="🛑 لغو شد",
+            stage="🛑 Cancelled",
             download_percent=100,
             upload_percent=0,
-            upload_status="از صف حذف شد.",
+            upload_status="Removed from the queue.",
         )
         await edit_status_by_task(client, queued_task, text)
-        await message.reply_text(f"🗑 از صف حذف شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🗑 Removed from queue: {task_id}", reply_markup=MENU_KEYBOARD)
         return
 
     processing_task = load_processing()
@@ -507,21 +493,21 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             task_id=task_id,
             file_name=processing_task.get("file_name", Path(processing_task.get("path", "")).name or "file"),
             file_size=int(processing_task.get("file_size", 0)),
-            stage="🛑 در حال لغو",
+            stage="🛑 Cancelling",
             download_percent=100,
             upload_percent=int(processing_task.get("upload_percent", 0)),
-            upload_status="بعد از پایان بخش فعلی متوقف می‌شود.",
+            upload_status="Stopping at the next safe checkpoint.",
             attempt_text=processing_task.get("attempt_text"),
         )
         await edit_status_by_task(client, processing_task, text)
-        await message.reply_text(f"🛑 لغو ثبت شد: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=MENU_KEYBOARD)
         return
 
     if is_cancelled(task_id):
-        await message.reply_text(f"🛑 قبلا لغو شده: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Already cancelled: {task_id}", reply_markup=MENU_KEYBOARD)
         return
 
-    await message.reply_text(f"🔎 شناسه پیدا نشد: {task_id}", reply_markup=MENU_KEYBOARD)
+    await message.reply_text(f"🔎 Task not found: {task_id}", reply_markup=MENU_KEYBOARD)
 
 
 def resolve_task_from_reply(status_message_id: int | None) -> tuple[str | None, dict | None]:
@@ -588,10 +574,10 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
             task_id=task_id,
             file_name=task_meta["file_name"],
             file_size=task_meta["file_size"],
-            stage="⬇️ در حال دریافت",
+            stage="⬇️ Downloading",
             download_percent=percent,
             upload_percent=0,
-            upload_status="بعد از دریافت وارد صف ارسال می‌شود.",
+            upload_status="The video will enter the upload queue after download.",
         )
         loop.create_task(
             safe_edit_status(
@@ -658,10 +644,10 @@ async def cleanup_handler(client: Client, message: Message):
     await message.reply_text(
         "\n".join(
             [
-                "<b>🧹 پاکسازی انجام شد</b>",
+                "<b>🧹 Cleanup Complete</b>",
                 "",
-                f"فایل حذف‌شده: <b>{removed_count}</b>",
-                f"فضای آزادشده: <b>{human_size(total_size)}</b>",
+                f"Removed files: <b>{removed_count}</b>",
+                f"Freed space: <b>{human_size(total_size)}</b>",
             ]
         ),
         parse_mode=enums.ParseMode.HTML,
@@ -671,21 +657,21 @@ async def cleanup_handler(client: Client, message: Message):
 
 async def retry_task_by_id(client: Client, message: Message, task_id: str) -> None:
     if task_id in ACTIVE_DOWNLOADS:
-        await message.reply_text(f"⬇️ این انتقال هنوز در حال دریافت است: {task_id}")
+        await message.reply_text(f"⬇️ This transfer is still downloading: {task_id}")
         return
 
     if find_queued_task(lambda task: task.get("task_id") == task_id):
-        await message.reply_text(f"⏳ این انتقال همین حالا در صف است: {task_id}")
+        await message.reply_text(f"⏳ This transfer is already queued: {task_id}")
         return
 
     processing_task = load_processing()
     if processing_task and processing_task.get("task_id") == task_id:
-        await message.reply_text(f"🚀 این انتقال همین حالا در حال ارسال است: {task_id}")
+        await message.reply_text(f"🚀 This transfer is already uploading: {task_id}")
         return
 
     failed_entry = find_failed_entry(task_id)
     if not failed_entry:
-        await message.reply_text(f"🔎 انتقال ناموفق پیدا نشد: {task_id}")
+        await message.reply_text(f"🔎 Failed transfer not found: {task_id}")
         return
 
     task = dict(failed_entry.get("task") or {})
@@ -694,8 +680,8 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
         await message.reply_text(
             "\n".join(
                 [
-                    f"⚠️ فایل محلی پیدا نشد: {task_id}",
-                    "احتمالا قبلا پاکسازی شده و باید دوباره ویدیو را ارسال کنی.",
+                    f"⚠️ Local file not found: {task_id}",
+                    "It was probably cleaned up. Please send the video again.",
                 ]
             ),
             reply_markup=MENU_KEYBOARD,
@@ -712,10 +698,10 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
         task_id=task_id,
         file_name=task.get("file_name", path.name),
         file_size=int(task.get("file_size", 0)),
-        stage="🔁 دوباره در صف",
+        stage="🔁 Queued Again",
         download_percent=100,
         upload_percent=0,
-        upload_status="انتقال دوباره به صف ارسال اضافه شد.",
+        upload_status="The transfer was added back to the upload queue.",
         queue_position=queue_position,
     )
     await edit_status_by_task(
@@ -726,7 +712,7 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
     )
 
     await message.reply_text(
-        f"🔁 دوباره به صف اضافه شد: {task_id}",
+        f"🔁 Added back to queue: {task_id}",
         reply_markup=MENU_KEYBOARD,
     )
 
@@ -737,7 +723,7 @@ async def retry_handler(client: Client, message: Message):
 
     if len(message.command) < 2:
         await message.reply_text(
-            "\n".join(["🔁 برای تلاش دوباره بزن", ltr_code("/retry task_id")]),
+            "\n".join(["🔁 Retry with", ltr_code("/retry task_id")]),
             parse_mode=enums.ParseMode.HTML,
             reply_markup=MENU_KEYBOARD,
         )
@@ -764,7 +750,7 @@ async def menu_button_handler(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"^cancel:"))
 async def cancel_callback_handler(client: Client, callback_query: CallbackQuery):
     task_id = (callback_query.data or "").split(":", 1)[1].strip()
-    await callback_query.answer("درخواست لغو ثبت شد.")
+    await callback_query.answer("Cancel requested.")
 
     try:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -777,7 +763,7 @@ async def cancel_callback_handler(client: Client, callback_query: CallbackQuery)
 @app.on_callback_query(filters.regex(r"^retry:"))
 async def retry_callback_handler(client: Client, callback_query: CallbackQuery):
     task_id = (callback_query.data or "").split(":", 1)[1].strip()
-    await callback_query.answer("تلاش دوباره ثبت شد.")
+    await callback_query.answer("Retry queued.")
 
     try:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -818,7 +804,7 @@ async def cancel_handler(client: Client, message: Message):
 async def media_handler(client: Client, message: Message):
     media_type, media = get_media(message)
     if not media:
-        await message.reply_text("⚠️ این پیام قابل پردازش نیست.")
+        await message.reply_text("⚠️ This message cannot be processed.")
         return
 
     task_id = uuid.uuid4().hex[:10]
@@ -831,10 +817,10 @@ async def media_handler(client: Client, message: Message):
             task_id=task_id,
             file_name=file_name,
             file_size=file_size,
-            stage="⏳ آماده دریافت",
+            stage="⏳ Preparing Download",
             download_percent=0,
             upload_percent=0,
-            upload_status="ویدیو به زودی دریافت می‌شود.",
+            upload_status="The video will start downloading soon.",
         ),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=status_action_keyboard(task_id, "cancel"),
@@ -895,10 +881,10 @@ async def media_handler(client: Client, message: Message):
                 task_id=task_id,
                 file_name=file_name,
                 file_size=file_size,
-                stage="⏳ در صف ارسال",
+                stage="⏳ Upload Queue",
                 download_percent=100,
                 upload_percent=0,
-                upload_status="منتظر نوبت ارسال به روبیکا.",
+                upload_status="Waiting for upload to Rubika.",
                 queue_position=queue_position,
             ),
             reply_markup=status_action_keyboard(task_id, "cancel"),
@@ -916,10 +902,10 @@ async def media_handler(client: Client, message: Message):
                     task_id=task_id,
                     file_name=file_name,
                     file_size=file_size,
-                    stage="🛑 لغو شد",
+                    stage="🛑 Cancelled",
                     download_percent=active.get("download_percent", 0),
                     upload_percent=active.get("upload_percent", 0),
-                    upload_status="انتقال متوقف شد.",
+                    upload_status="Transfer stopped.",
                 ),
             )
         else:
@@ -929,10 +915,10 @@ async def media_handler(client: Client, message: Message):
                     task_id=task_id,
                     file_name=file_name,
                     file_size=file_size,
-                    stage="❌ خطا در دریافت",
+                    stage="❌ Download Failed",
                     download_percent=active.get("download_percent", 0),
                     upload_percent=active.get("upload_percent", 0),
-                    upload_status="دریافت انجام نشد.",
+                    upload_status="The download did not complete.",
                     note=str(e),
                 ),
             )
