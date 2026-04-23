@@ -173,6 +173,9 @@ def make_upload_progress_callback(task: dict, attempt: int):
     task_id = task.get("task_id", "")
 
     async def callback(total: int, current: int) -> None:
+        if is_cancelled(task_id):
+            raise CancelledTaskError("Cancelled by user.")
+
         if total <= 0:
             return
 
@@ -199,9 +202,6 @@ def make_upload_progress_callback(task: dict, attempt: int):
             upload_status="ویدیو در حال ارسال به روبیکا است.",
             attempt_text=task["attempt_text"],
         )
-
-        if is_cancelled(task_id):
-            raise CancelledTaskError("Cancelled by user.")
 
     return callback
 
@@ -230,7 +230,7 @@ def send_with_retry(
         )
 
         try:
-            return asyncio.run(
+            result = asyncio.run(
                 send_document(
                     file_path,
                     caption,
@@ -238,7 +238,15 @@ def send_with_retry(
                     file_name=file_name,
                 )
             )
+
+            if is_cancelled(task_id):
+                raise CancelledTaskError("Cancelled by user.")
+
+            return result
         except Exception as e:
+            if isinstance(e, CancelledTaskError):
+                raise
+
             last_error = e
             error_text = str(e).lower()
             task["attempt_text"] = f"{attempt} از {MAX_RETRIES}"
