@@ -238,6 +238,18 @@ echo "Check sessions with: screen -ls"
 echo "Attach to session with: screen -r $SCREEN_NAME"
 ```
 
+How to use it:
+
+```bash
+nano /opt/Tele2Rub/update.sh
+```
+
+Paste the script, save it, then run:
+
+```bash
+bash /opt/Tele2Rub/update.sh
+```
+
 ## Troubleshooting
 
 If the bot does not start:
