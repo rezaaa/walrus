@@ -1,6 +1,6 @@
 # Walrus
 
-Send a video to a Telegram bot and have it uploaded to your Rubika Saved Messages.
+Send a video to a Telegram bot and have it uploaded to Rubika Saved Messages or a Rubika channel.
 
 ## Disclaimer
 
@@ -34,7 +34,9 @@ Walrus uses a simple queue-based flow:
 - Provides quick action buttons for status, transfers, cleanup, cancel, and retry
 - Sends a completion notification when a transfer finishes successfully
 - Shows total elapsed transfer time on successful uploads
-- Uploads videos to Rubika Saved Messages with their original filename
+- Lets you switch the active Rubika number/session from Telegram
+- Lets you switch uploads between Rubika Saved Messages and a Rubika channel
+- Uploads videos with their original filename
 
 ## Bot Controls
 
@@ -44,10 +46,15 @@ Main menu buttons:
 - `📋 Transfers`
 - `🧹 Cleanup`
 - `🛑 Cancel`
+- `⚙️ Settings`
 
 Available commands:
 
 - `/start` - open the main menu
+- `/settings` - show the current Rubika session and upload destination
+- `/set_rubika <session_name>` - switch to another Rubika number/session
+- `/use_saved` - send new uploads to Saved Messages
+- `/use_channel <channel_target>` - send new uploads to a Rubika channel
 - `/status` - show active downloads, active upload, queue, failed count, and local storage usage
 - `/transfers` - show current downloads, current upload, queued items, and retryable failed transfers
 - `/cleanup` - preview removable files in `downloads/`
@@ -109,6 +116,7 @@ Runtime files:
 - `queue/processing.json` - the job currently being uploaded
 - `queue/failed.jsonl` - failed jobs log
 - `queue/cancelled/` - cancellation markers
+- `queue/settings.json` - active Rubika session and destination settings
 
 Cleanup behavior:
 
@@ -153,6 +161,9 @@ Variables:
 - `BOT_TOKEN` - from BotFather
 - `RUBIKA_SESSION` - session name or path used by `rubpy`
 - `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
+
+Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
+That lets you switch the active Rubika number/session and destination without editing `.env` or restarting the bot.
 
 How to get your Telegram user ID:
 

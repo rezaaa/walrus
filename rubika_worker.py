@@ -22,22 +22,22 @@ from task_store import (
     human_duration,
     human_speed,
     is_cancelled,
+    load_runtime_settings,
     load_processing,
+    normalize_runtime_settings,
     normalize_upload_filename,
-    save_worker_pid,
     pop_first_task,
+    save_worker_pid,
     save_processing,
 )
 
 
 load_dotenv()
 
-SESSION = os.getenv("RUBIKA_SESSION", "rubika_session").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 MAX_RETRIES = 5
 RETRY_DELAY = 3
-TARGET = "me"
 
 ensure_storage_dirs()
 
@@ -62,16 +62,37 @@ def has_session(session_name: str) -> bool:
     return any(path.exists() for path in candidates)
 
 
-def ensure_session():
-    if has_session(SESSION):
+def ensure_session(session_name: str) -> None:
+    if has_session(session_name):
         return
 
     async def bootstrap():
-        async with RubikaClient(name=SESSION):
+        async with RubikaClient(name=session_name):
             return None
 
     asyncio.run(bootstrap())
     print("Login successful.")
+
+
+def resolve_task_settings(task: dict) -> dict:
+    current_settings = load_runtime_settings()
+    return normalize_runtime_settings(
+        {
+            "rubika_session": task.get("rubika_session") or current_settings["rubika_session"],
+            "rubika_target_type": task.get("rubika_target_type") or current_settings["rubika_target_type"],
+            "rubika_channel_target": (
+                task.get("rubika_channel_target")
+                or task.get("rubika_target")
+                or current_settings["rubika_channel_target"]
+            ),
+        }
+    )
+
+
+def format_destination_label(settings: dict) -> str:
+    if settings.get("rubika_target_type") == "channel":
+        return f"Channel: {settings.get('rubika_channel_target') or '-'}"
+    return "Saved Messages"
 
 
 def should_keep_extension(filename: str) -> bool:
@@ -186,7 +207,7 @@ def task_elapsed_text(task: dict) -> str | None:
     return format_duration(time.time() - started_at_value)
 
 
-def notify_transfer_complete(task: dict, elapsed_text: str | None) -> None:
+def notify_transfer_complete(task: dict, elapsed_text: str | None, settings: dict) -> None:
     chat_id = task.get("chat_id")
     if not chat_id:
         return
@@ -195,6 +216,7 @@ def notify_transfer_complete(task: dict, elapsed_text: str | None) -> None:
     lines = [
         "<b>✅ Transfer Complete</b>",
         f"🎞 <b>Video:</b> <code>{escape(file_name)}</code>",
+        f"📬 <b>Destination:</b> <code>{escape(format_destination_label(settings))}</code>",
     ]
 
     if elapsed_text:
@@ -208,14 +230,16 @@ def notify_transfer_complete(task: dict, elapsed_text: str | None) -> None:
 
 
 async def send_document(
+    session_name: str,
+    target: str,
     file_path: str,
     caption: str = "",
     callback=None,
     file_name: str | None = None,
 ):
-    async with RubikaClient(name=SESSION) as client:
+    async with RubikaClient(name=session_name) as client:
         return await client.send_document(
-            TARGET,
+            target,
             file_path,
             caption=caption or "",
             callback=callback,
@@ -318,6 +342,8 @@ def make_upload_progress_callback(task: dict, attempt: int):
 
 def send_with_retry(
     task: dict,
+    session_name: str,
+    target: str,
     file_path: str,
     caption: str = "",
     file_name: str | None = None,
@@ -344,6 +370,8 @@ def send_with_retry(
         try:
             result = asyncio.run(
                 send_document(
+                    session_name,
+                    target,
                     file_path,
                     caption,
                     callback=make_upload_progress_callback(task, attempt),
@@ -402,6 +430,11 @@ def process_task(task: dict) -> None:
     if not original_path.exists():
         raise RuntimeError("Local file not found.")
 
+    settings = resolve_task_settings(task)
+    task["rubika_session"] = settings["rubika_session"]
+    task["rubika_target_type"] = settings["rubika_target_type"]
+    task["rubika_channel_target"] = settings["rubika_channel_target"]
+    task["rubika_target"] = settings["rubika_target"]
     send_path = original_path
     send_name = normalize_upload_filename(task.get("file_name") or original_path.name, original_path.name)
 
@@ -409,16 +442,24 @@ def process_task(task: dict) -> None:
         if is_cancelled(task_id):
             raise CancelledTaskError("Cancelled before upload started.")
 
+        ensure_session(settings["rubika_session"])
         update_telegram_status(
             task,
             stage="📤 Upload Queue",
-            upload_status="Preparing the video for upload.",
+            upload_status=f"Preparing the video for upload to {format_destination_label(settings)}.",
         )
 
         task["file_name"] = send_name
         save_processing(task)
 
-        send_with_retry(task, str(send_path), caption, file_name=send_name)
+        send_with_retry(
+            task,
+            settings["rubika_session"],
+            settings["rubika_target"],
+            str(send_path),
+            caption,
+            file_name=send_name,
+        )
     except CancelledTaskError:
         cleanup_local_file(str(send_path))
         clear_cancelled(task_id)
@@ -445,14 +486,14 @@ def process_task(task: dict) -> None:
         task,
         stage="✅ Uploaded",
         upload_status=(
-            f"Video uploaded successfully in {elapsed_text}."
+            f"Video uploaded to {format_destination_label(settings)} successfully in {elapsed_text}."
             if elapsed_text
-            else "Video uploaded successfully."
+            else f"Video uploaded to {format_destination_label(settings)} successfully."
         ),
         attempt_text=task.get("attempt_text"),
         action=None,
     )
-    notify_transfer_complete(task, elapsed_text)
+    notify_transfer_complete(task, elapsed_text, settings)
 
 
 def recover_cancelled_processing_task() -> None:
@@ -479,7 +520,6 @@ def recover_cancelled_processing_task() -> None:
 def worker_loop():
     save_worker_pid(os.getpid())
     atexit.register(clear_worker_pid)
-    ensure_session()
     recover_cancelled_processing_task()
     print("Rubika worker started.")
 

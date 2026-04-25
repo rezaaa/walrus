@@ -24,6 +24,7 @@ import requests
 
 from task_store import (
     DOWNLOAD_DIR,
+    apply_runtime_settings,
     append_task,
     build_status_text,
     cleanup_local_file,
@@ -35,6 +36,7 @@ from task_store import (
     find_queued_task,
     is_cancelled,
     load_processing,
+    load_runtime_settings,
     load_worker_pid,
     ltr_code,
     mark_cancelled,
@@ -44,6 +46,7 @@ from task_store import (
     read_queue_tasks,
     remove_queued_task,
     safe_filename,
+    save_runtime_settings,
     split_name,
 )
 
@@ -69,12 +72,14 @@ app = Client(
 
 ACTIVE_DOWNLOADS: dict[str, dict] = {}
 COMMANDS_READY = False
+PENDING_SETTINGS: dict[int, str] = {}
 
 BTN_STATUS = "📊 Status"
 BTN_TRANSFERS = "📋 Transfers"
 BTN_CLEANUP = "🧹 Cleanup"
 BTN_CANCEL = "🛑 Cancel"
-MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_CANCEL}
+BTN_SETTINGS = "⚙️ Settings"
+MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_CANCEL, BTN_SETTINGS}
 DIRECT_VIDEO_EXTENSIONS = {
     ".mp4",
     ".mkv",
@@ -92,14 +97,19 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_TRANSFERS)],
         [KeyboardButton(BTN_CLEANUP), KeyboardButton(BTN_CANCEL)],
+        [KeyboardButton(BTN_SETTINGS)],
     ],
     resize_keyboard=True,
 )
 
 BOT_COMMANDS = [
     BotCommand("start", "Open the main menu"),
+    BotCommand("settings", "View Rubika upload settings"),
     BotCommand("status", "Show queue and storage status"),
     BotCommand("transfers", "List active and queued transfers"),
+    BotCommand("set_rubika", "Change the Rubika number/session"),
+    BotCommand("use_saved", "Send uploads to Saved Messages"),
+    BotCommand("use_channel", "Send uploads to a Rubika channel"),
     BotCommand("retry", "Retry a failed transfer"),
     BotCommand("retry_all", "Retry all failed transfers"),
     BotCommand("cleanup", "Clean safe download leftovers"),
@@ -146,10 +156,14 @@ async def ensure_authorized_callback(callback_query: CallbackQuery) -> bool:
 
 
 def build_menu_text() -> str:
+    settings = load_runtime_settings()
     return "\n".join(
         [
             "<b>🎬 Walrus</b>",
-            "📤 <b>Send a video or direct video link</b> and I will upload it to Rubika Saved Messages.",
+            "📤 <b>Send a video or direct video link</b> and I will upload it to Rubika.",
+            "",
+            f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
+            f"📬 <b>Destination:</b> {ltr_code(format_destination_label(settings))}",
         ]
     )
 
@@ -165,6 +179,7 @@ def main_action_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🧹 Cleanup", callback_data="menu:cleanup"),
                 InlineKeyboardButton("🛑 Cancel", callback_data="menu:cancel"),
             ],
+            [InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings")],
         ]
     )
 
@@ -173,6 +188,7 @@ def status_summary_keyboard(has_cleanup: bool) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("📋 Details", callback_data="menu:transfers")]]
     if has_cleanup:
         rows.append([InlineKeyboardButton("🧹 Confirm Cleanup", callback_data="cleanup:confirm")])
+    rows.append([InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -182,6 +198,194 @@ def cleanup_keyboard(has_candidates: bool) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("✅ Confirm cleanup", callback_data="cleanup:confirm")]]
     )
+
+
+def format_destination_label(settings: dict) -> str:
+    if settings.get("rubika_target_type") == "channel":
+        return f"Channel: {settings.get('rubika_channel_target') or '-'}"
+    return "Saved Messages"
+
+
+def settings_action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📱 Change Rubika Number", callback_data="settings:session")],
+            [InlineKeyboardButton("💬 Use Saved Messages", callback_data="settings:saved")],
+            [InlineKeyboardButton("📢 Use Channel", callback_data="settings:channel")],
+        ]
+    )
+
+
+def build_settings_text(note: str | None = None) -> str:
+    settings = load_runtime_settings()
+    lines = [
+        "<b>⚙️ Rubika Settings</b>",
+        "",
+        f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
+        f"📬 <b>Destination:</b> {ltr_code(format_destination_label(settings))}",
+    ]
+
+    if settings.get("rubika_channel_target"):
+        lines.append(
+            f"📢 <b>Saved Channel Target:</b> {ltr_code(settings['rubika_channel_target'])}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "New uploads and retries will use these settings.",
+            "Tap a button below or use /set_rubika, /use_saved, and /use_channel.",
+            "If no channel is saved yet, choosing channel will start channel setup.",
+        ]
+    )
+
+    if note:
+        lines.extend(["", note])
+
+    return "\n".join(lines)
+
+
+def clear_pending_setting(chat_id: int) -> None:
+    PENDING_SETTINGS.pop(chat_id, None)
+
+
+def set_pending_setting(chat_id: int, action: str) -> None:
+    PENDING_SETTINGS[chat_id] = action
+
+
+async def send_settings_panel(message: Message, note: str | None = None) -> None:
+    await message.reply_text(
+        build_settings_text(note),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=settings_action_keyboard(),
+    )
+
+
+async def prompt_rubika_session_update(message: Message) -> None:
+    set_pending_setting(message.chat.id, "session")
+    await message.reply_text(
+        "\n".join(
+            [
+                "📱 Send the Rubika session name/path for the number you want to use.",
+                "If this session does not exist yet, the worker will ask for Rubika login on the next upload.",
+                "",
+                "Send `cancel` to stop this change.",
+            ]
+        ),
+        parse_mode=enums.ParseMode.MARKDOWN,
+        reply_markup=MENU_KEYBOARD,
+    )
+
+
+async def prompt_channel_target_update(message: Message) -> None:
+    set_pending_setting(message.chat.id, "channel")
+    await message.reply_text(
+        "\n".join(
+            [
+                "📢 Send the Rubika channel target you want to upload to.",
+                "You can paste a channel username, link, or GUID supported by your Rubika session.",
+                "",
+                "Send `cancel` to stop this change.",
+            ]
+        ),
+        parse_mode=enums.ParseMode.MARKDOWN,
+        reply_markup=MENU_KEYBOARD,
+    )
+
+
+async def update_rubika_session_setting(message: Message, session_name: str) -> None:
+    session_name = session_name.strip()
+    if not session_name:
+        await message.reply_text(
+            "⚠️ Rubika session cannot be empty.",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return
+
+    save_runtime_settings(
+        {
+            **load_runtime_settings(),
+            "rubika_session": session_name,
+        }
+    )
+    clear_pending_setting(message.chat.id)
+    await send_settings_panel(
+        message,
+        note="✅ Rubika session updated. The next upload will use the new number/session.",
+    )
+
+
+async def update_saved_messages_setting(message: Message) -> None:
+    save_runtime_settings(
+        {
+            **load_runtime_settings(),
+            "rubika_target_type": "saved_messages",
+        }
+    )
+    clear_pending_setting(message.chat.id)
+    await send_settings_panel(
+        message,
+        note="✅ Upload destination changed to Saved Messages.",
+    )
+
+
+async def update_channel_setting(message: Message, channel_target: str) -> None:
+    channel_target = channel_target.strip()
+    if not channel_target:
+        await message.reply_text(
+            "⚠️ Channel target cannot be empty.",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return
+
+    save_runtime_settings(
+        {
+            **load_runtime_settings(),
+            "rubika_target_type": "channel",
+            "rubika_channel_target": channel_target,
+        }
+    )
+    clear_pending_setting(message.chat.id)
+    await send_settings_panel(
+        message,
+        note="✅ Upload destination changed to the selected channel.",
+    )
+
+
+async def use_saved_channel_or_prompt(message: Message) -> None:
+    settings = load_runtime_settings()
+    saved_channel_target = (settings.get("rubika_channel_target") or "").strip()
+
+    if saved_channel_target:
+        await update_channel_setting(message, saved_channel_target)
+        return
+
+    await prompt_channel_target_update(message)
+
+
+async def maybe_handle_pending_setting_input(message: Message) -> bool:
+    pending_action = PENDING_SETTINGS.get(message.chat.id)
+    if not pending_action:
+        return False
+
+    text = (message.text or "").strip()
+    if not text:
+        return False
+
+    if text.lower() == "cancel":
+        clear_pending_setting(message.chat.id)
+        await send_settings_panel(message, note="⚪️ Setting change cancelled.")
+        return True
+
+    if pending_action == "session":
+        await update_rubika_session_setting(message, text)
+        return True
+
+    if pending_action == "channel":
+        await update_channel_setting(message, text)
+        return True
+
+    return False
 
 
 async def send_menu(message: Message) -> None:
@@ -485,9 +689,13 @@ def build_status_summary() -> str:
     failed_entries = read_failed_entries()
     files = iter_download_files()
     candidates = cleanup_candidates()
+    settings = load_runtime_settings()
 
     lines = [
         "<b>📊 Walrus Status</b>",
+        "",
+        f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
+        f"📬 <b>Destination:</b> {ltr_code(format_destination_label(settings))}",
         "",
         f"⬇️ <b>Active Downloads:</b> {ltr_code(str(len(active_downloads)))}",
         f"🚀 <b>Active Uploads:</b> {ltr_code(str(1 if processing else 0))}",
@@ -1179,6 +1387,7 @@ async def queue_downloaded_file(
         "media_type": media_type,
         "started_at": started_at,
     }
+    apply_runtime_settings(task)
 
     append_task(task)
 
@@ -1204,6 +1413,49 @@ async def start_handler(client: Client, message: Message):
         return
     await ensure_bot_commands(client)
     await send_menu(message)
+
+
+@app.on_message(filters.private & filters.command("settings"))
+async def settings_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+    clear_pending_setting(message.chat.id)
+    await send_settings_panel(message)
+
+
+@app.on_message(filters.private & filters.command("set_rubika"))
+async def set_rubika_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    if len(message.command or []) < 2:
+        await prompt_rubika_session_update(message)
+        return
+
+    await update_rubika_session_setting(message, " ".join(message.command[1:]))
+
+
+@app.on_message(filters.private & filters.command("use_saved"))
+async def use_saved_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+    await update_saved_messages_setting(message)
+
+
+@app.on_message(filters.private & filters.command("use_channel"))
+async def use_channel_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    if len(message.command or []) < 2:
+        await use_saved_channel_or_prompt(message)
+        return
+
+    await update_channel_setting(message, " ".join(message.command[1:]))
 
 
 @app.on_message(filters.private & filters.command("status"))
@@ -1274,6 +1526,7 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
     task["attempt_text"] = None
     task["started_at"] = time.time()
     task["file_size"] = int(task.get("file_size") or path.stat().st_size)
+    apply_runtime_settings(task)
     append_task(task)
 
     queue_position = queue_size() + (1 if load_processing() else 0)
@@ -1343,6 +1596,7 @@ async def retry_all_failed_tasks(client: Client, message: Message) -> None:
         retry_task["eta_text"] = None
         retry_task["started_at"] = time.time()
         retry_task["file_size"] = int(retry_task.get("file_size") or path.stat().st_size)
+        apply_runtime_settings(retry_task)
         append_task(retry_task)
         queued_count += 1
 
@@ -1426,6 +1680,8 @@ async def menu_button_handler(client: Client, message: Message):
         await cleanup_handler(client, message)
     elif text == BTN_CANCEL:
         await send_cancel_picker(message)
+    elif text == BTN_SETTINGS:
+        await settings_handler(client, message)
 
 
 @app.on_callback_query(filters.regex(r"^menu:"))
@@ -1443,6 +1699,23 @@ async def menu_callback_handler(client: Client, callback_query: CallbackQuery):
         await send_cleanup_preview(callback_query.message)
     elif action == "cancel":
         await send_cancel_picker(callback_query.message)
+    elif action == "settings":
+        await send_settings_panel(callback_query.message)
+
+
+@app.on_callback_query(filters.regex(r"^settings:"))
+async def settings_callback_handler(client: Client, callback_query: CallbackQuery):
+    if not await ensure_authorized_callback(callback_query):
+        return
+    action = (callback_query.data or "").split(":", 1)[1].strip()
+    await callback_query.answer()
+
+    if action == "session":
+        await prompt_rubika_session_update(callback_query.message)
+    elif action == "saved":
+        await update_saved_messages_setting(callback_query.message)
+    elif action == "channel":
+        await use_saved_channel_or_prompt(callback_query.message)
 
 
 @app.on_callback_query(filters.regex(r"^cleanup:confirm$"))
@@ -1756,6 +2029,9 @@ async def direct_video_url_handler(_client: Client, message: Message):
 
     text = (message.text or "").strip()
     if not text or text in MENU_BUTTONS or text.startswith("/"):
+        return
+
+    if await maybe_handle_pending_setting_input(message):
         return
 
     urls = extract_direct_urls(text)

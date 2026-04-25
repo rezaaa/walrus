@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from html import escape
@@ -16,6 +17,7 @@ PROCESSING_FILE = QUEUE_DIR / "processing.json"
 FAILED_FILE = QUEUE_DIR / "failed.jsonl"
 CANCEL_DIR = QUEUE_DIR / "cancelled"
 WORKER_PID_FILE = QUEUE_DIR / "rub_worker.pid"
+SETTINGS_FILE = QUEUE_DIR / "settings.json"
 LRM = "\u200e"
 
 
@@ -175,6 +177,89 @@ def build_status_text(
         lines.append(escape(note))
 
     return "\n".join(lines)
+
+
+def env_runtime_settings() -> dict:
+    default_session = os.getenv("RUBIKA_SESSION", "rubika_session").strip() or "rubika_session"
+    default_target_type = os.getenv("RUBIKA_TARGET_TYPE", "saved_messages").strip().lower()
+    default_channel_target = (
+        os.getenv("RUBIKA_CHANNEL", "").strip()
+        or os.getenv("RUBIKA_TARGET", "").strip()
+    )
+
+    return {
+        "rubika_session": default_session,
+        "rubika_target_type": default_target_type,
+        "rubika_channel_target": default_channel_target,
+    }
+
+
+def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
+    settings = settings or {}
+    defaults = env_runtime_settings()
+
+    rubika_session = (
+        str(settings.get("rubika_session") or defaults["rubika_session"]).strip()
+        or defaults["rubika_session"]
+    )
+    rubika_target_type = str(
+        settings.get("rubika_target_type") or defaults["rubika_target_type"]
+    ).strip().lower()
+    rubika_channel_target = str(
+        settings.get("rubika_channel_target") or defaults["rubika_channel_target"]
+    ).strip()
+
+    if rubika_target_type == "channel" and rubika_channel_target:
+        rubika_target = rubika_channel_target
+    else:
+        rubika_target_type = "saved_messages"
+        rubika_target = "me"
+
+    return {
+        "rubika_session": rubika_session,
+        "rubika_target_type": rubika_target_type,
+        "rubika_channel_target": rubika_channel_target,
+        "rubika_target": rubika_target,
+    }
+
+
+def load_runtime_settings() -> dict:
+    ensure_storage_dirs()
+    if not SETTINGS_FILE.exists():
+        return normalize_runtime_settings()
+
+    try:
+        return normalize_runtime_settings(
+            json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        )
+    except Exception:
+        return normalize_runtime_settings()
+
+
+def save_runtime_settings(settings: dict) -> dict:
+    ensure_storage_dirs()
+    normalized = normalize_runtime_settings(settings)
+    payload = {
+        "rubika_session": normalized["rubika_session"],
+        "rubika_target_type": normalized["rubika_target_type"],
+        "rubika_channel_target": normalized["rubika_channel_target"],
+    }
+    temp_path = SETTINGS_FILE.with_suffix(".tmp")
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temp_path.replace(SETTINGS_FILE)
+    return normalized
+
+
+def apply_runtime_settings(task: dict, settings: Optional[dict] = None) -> dict:
+    runtime_settings = normalize_runtime_settings(settings or load_runtime_settings())
+    task["rubika_session"] = runtime_settings["rubika_session"]
+    task["rubika_target_type"] = runtime_settings["rubika_target_type"]
+    task["rubika_channel_target"] = runtime_settings["rubika_channel_target"]
+    task["rubika_target"] = runtime_settings["rubika_target"]
+    return task
 
 
 def append_task(task: dict) -> None:
