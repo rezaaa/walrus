@@ -54,6 +54,7 @@ MEDIA_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp",
     ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac",
 }
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".m4v"}
 
 
 def log_worker_event(task: dict | None, event: str, level: str = "INFO", **fields) -> None:
@@ -318,9 +319,10 @@ async def send_document(
                 for key in ("mime", "size", "dc_id", "file_id", "file_name")
             },
         )
+        inline_type = rubika_inline_type(task, file_path, upload_name)
         file_inline.update(
             {
-                "type": "File",
+                "type": inline_type,
                 "time": 1,
                 "width": 200,
                 "height": 200,
@@ -344,7 +346,7 @@ async def send_document(
             try:
                 result = await client.send_message(
                     object_guid=target,
-                    text=caption or "",
+                    text=caption.strip() if caption and caption.strip() else None,
                     file_inline=file_inline,
                 )
                 log_worker_event(
@@ -456,7 +458,19 @@ def build_fallback_upload_name(task: dict, file_path: str, current_name: str | N
     original_suffix = Path(current_name or file_path).suffix.lower()
     suffix = original_suffix if original_suffix in MEDIA_EXTENSIONS else ".mp4"
     task_id = (task.get("task_id") or "file").strip()[:16] or "file"
-    return safe_filename(f"video_{task_id}{suffix}", f"video_{task_id}.mp4")
+    return safe_filename(f"{task_id}{suffix}", f"{task_id}.mp4")
+
+
+def rubika_inline_type(task: dict, file_path: str, file_name: str | None = None) -> str:
+    suffix = Path(file_name or file_path).suffix.lower()
+    media_type = str(task.get("media_type") or "").lower()
+    if media_type == "video" or suffix in VIDEO_EXTENSIONS:
+        return "Video"
+    if media_type == "photo" or suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}:
+        return "Image"
+    if media_type in {"audio", "voice"} or suffix in {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"}:
+        return "Music"
+    return "File"
 
 
 def make_upload_progress_callback(task: dict, attempt: int):
@@ -550,8 +564,13 @@ def send_with_retry(
 ):
     task_id = task.get("task_id", "")
     last_error = None
-    upload_name = task.get("upload_file_name") or file_name or Path(file_path).name
-    used_fallback_name = bool(task.get("upload_file_name"))
+    if task.get("source") == "direct_url":
+        upload_name = build_fallback_upload_name(task, file_path, file_name)
+        task["upload_file_name"] = upload_name
+        used_fallback_name = True
+    else:
+        upload_name = task.get("upload_file_name") or file_name or Path(file_path).name
+        used_fallback_name = bool(task.get("upload_file_name"))
 
     for attempt in range(1, MAX_RETRIES + 1):
         if is_cancelled(task_id):

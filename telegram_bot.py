@@ -173,7 +173,7 @@ def build_menu_text() -> str:
     settings = load_runtime_settings()
     return "\n".join(
         [
-            "<b>🎬 Walrus</b>",
+            "<b>⛵️ Walrus</b>",
             "📤 <b>Send a video or direct video link</b> and I will upload it to Rubika.",
             "",
             f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
@@ -1714,7 +1714,7 @@ async def queue_downloaded_file(
     if source_url:
         task["source_url"] = source_url
     if upload_file_name:
-        task["upload_file_name"] = normalize_upload_filename(
+        task["upload_file_name"] = safe_filename(
             upload_file_name,
             downloaded_path.name,
         )
@@ -2252,7 +2252,7 @@ async def process_direct_video_url(message: Message, url: str) -> dict:
     if fallback_suffix not in DIRECT_VIDEO_EXTENSIONS:
         fallback_suffix = ".mp4"
 
-    file_name = build_url_download_filename(url, task_id, fallback_suffix)
+    file_name = f"{task_id}{fallback_suffix}"
     download_path = DOWNLOAD_DIR / file_name
     started_at = time.time()
     task_meta = {"file_name": file_name, "file_size": 0}
@@ -2262,7 +2262,7 @@ async def process_direct_video_url(message: Message, url: str) -> dict:
         url=url,
         file_name=file_name,
         download_path=str(download_path),
-        upload_file_name=f"video_{task_id}{fallback_suffix}",
+        upload_file_name=file_name,
     )
 
     status = await message.reply_text(
@@ -2328,7 +2328,7 @@ async def process_direct_video_url(message: Message, url: str) -> dict:
             caption="",
             source="direct_url",
             source_url=url,
-            upload_file_name=f"video_{task_id}{fallback_suffix}",
+            upload_file_name=file_name,
         )
         log_bot_event(task_id, "direct_url_queued", file_name=file_name)
         return {"task_id": task_id, "file_name": file_name, "status": "queued"}
