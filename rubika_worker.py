@@ -41,6 +41,8 @@ MAX_RETRIES = 5
 RETRY_DELAY = 3
 ERROR_TEXT_LIMIT = 220
 RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
+RUBIKA_FINALIZE_RETRIES = int(os.getenv("RUBIKA_FINALIZE_RETRIES", "3") or 3)
+RUBIKA_FINALIZE_RETRY_DELAY = float(os.getenv("RUBIKA_FINALIZE_RETRY_DELAY", "2") or 2)
 
 ensure_storage_dirs()
 
@@ -262,13 +264,41 @@ async def send_document(
         ) from exc
 
     try:
-        return await client.send_document(
-            target,
+        uploaded = await client.upload(
             file_path,
-            caption=caption or "",
             callback=callback,
             file_name=file_name or Path(file_path).name,
         )
+
+        file_inline = dict(uploaded) if isinstance(uploaded, dict) else uploaded.to_dict
+        file_inline.update(
+            {
+                "type": "File",
+                "time": 1,
+                "width": 200,
+                "height": 200,
+                "music_performer": "",
+                "is_spoil": False,
+            }
+        )
+
+        last_error = None
+        for attempt in range(1, RUBIKA_FINALIZE_RETRIES + 1):
+            try:
+                return await client.send_message(
+                    object_guid=target,
+                    text=caption or "",
+                    file_inline=file_inline,
+                )
+            except Exception as error:
+                last_error = error
+                if attempt >= RUBIKA_FINALIZE_RETRIES:
+                    break
+                if not is_transient_upload_error(compact_error_text(error).lower()):
+                    break
+                await asyncio.sleep(RUBIKA_FINALIZE_RETRY_DELAY * attempt)
+
+        raise last_error if last_error else RuntimeError("Rubika finalization failed.")
     finally:
         if entered:
             await client.__aexit__(None, None, None)
@@ -302,6 +332,13 @@ def is_transient_upload_error(error_text: str) -> bool:
             "temporary failure",
             "network is unreachable",
             "error uploading chunk",
+            "error_try_again",
+            "error message try",
+            "error_message_try",
+            "too_requests",
+            "too requests",
+            "internal_problem",
+            "no_connection",
         ]
     )
 
@@ -362,7 +399,8 @@ def make_upload_progress_callback(task: dict, attempt: int):
         if total <= 0:
             return
 
-        percent = min(100, max(0, int((current * 100) / total)))
+        raw_percent = min(100, max(0, int((current * 100) / total)))
+        percent = min(raw_percent, 99)
         if state["last_percent"] >= 0 and percent < state["last_percent"]:
             return
 
@@ -380,7 +418,7 @@ def make_upload_progress_callback(task: dict, attempt: int):
             state["last_sample_at"] = now
 
         should_emit = (
-            percent == 100
+            raw_percent == 100
             or state["last_percent"] < 0
             or percent - state["last_percent"] >= 5
             or now - state["last_update"] >= 2
@@ -404,7 +442,11 @@ def make_upload_progress_callback(task: dict, attempt: int):
         update_telegram_status(
             task,
             stage="🚀 Uploading",
-            upload_status="Sending video to Rubika.",
+            upload_status=(
+                "Finalizing the upload in Rubika."
+                if raw_percent == 100
+                else "Sending video to Rubika."
+            ),
             attempt_text=task["attempt_text"],
         )
 
@@ -421,8 +463,8 @@ def send_with_retry(
 ):
     task_id = task.get("task_id", "")
     last_error = None
-    upload_name = file_name or Path(file_path).name
-    used_fallback_name = False
+    upload_name = task.get("upload_file_name") or file_name or Path(file_path).name
+    used_fallback_name = bool(task.get("upload_file_name"))
 
     for attempt in range(1, MAX_RETRIES + 1):
         if is_cancelled(task_id):
@@ -475,6 +517,7 @@ def send_with_retry(
             if fallback_name_retry:
                 upload_name = build_fallback_upload_name(task, file_path, upload_name)
                 used_fallback_name = True
+                task["upload_file_name"] = upload_name
 
             if attempt < MAX_RETRIES and (transient or near_complete or fallback_name_retry):
                 delay = RETRY_DELAY * attempt

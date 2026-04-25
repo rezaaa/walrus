@@ -1592,6 +1592,9 @@ async def queue_downloaded_file(
     started_at: float,
     downloaded_path: Path,
     caption: str = "",
+    source: str = "telegram",
+    source_url: str | None = None,
+    upload_file_name: str | None = None,
 ) -> None:
     file_name = normalize_upload_filename(file_name, downloaded_path.name)
     queue_position = queue_size() + (1 if load_processing() else 0) + 1
@@ -1606,7 +1609,15 @@ async def queue_downloaded_file(
         "file_size": file_size,
         "media_type": media_type,
         "started_at": started_at,
+        "source": source,
     }
+    if source_url:
+        task["source_url"] = source_url
+    if upload_file_name:
+        task["upload_file_name"] = normalize_upload_filename(
+            upload_file_name,
+            downloaded_path.name,
+        )
     apply_runtime_settings(task)
 
     append_task(task)
@@ -2184,6 +2195,9 @@ async def process_direct_video_url(message: Message, url: str) -> dict:
             started_at=started_at,
             downloaded_path=downloaded_path,
             caption="",
+            source="direct_url",
+            source_url=url,
+            upload_file_name=f"video_{task_id}{fallback_suffix}",
         )
         return {"task_id": task_id, "file_name": file_name, "status": "queued"}
     except Exception as e:
