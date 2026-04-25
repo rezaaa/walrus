@@ -1,6 +1,6 @@
 # Walrus
 
-Send a video to a Telegram bot and have it uploaded to Rubika Saved Messages or a Rubika channel.
+Send a video to a Telegram bot and have it uploaded to Rubika Saved Messages.
 
 ## Disclaimer
 
@@ -35,7 +35,6 @@ Walrus uses a simple queue-based flow:
 - Sends a completion notification when a transfer finishes successfully
 - Shows total elapsed transfer time on successful uploads
 - Lets you switch the active Rubika number/session from Telegram
-- Lets you switch uploads between Rubika Saved Messages and a Rubika channel
 - Uploads videos with their original filename
 
 ## Bot Controls
@@ -55,7 +54,6 @@ Available commands:
 - `/set_rubika` - start Rubika number setup in Telegram
 - `/set_rubika <phone_number>` - start Rubika number setup directly with a phone number
 - `/use_saved` - send new uploads to Saved Messages
-- `/use_channel <channel_target>` - send new uploads to a Rubika channel
 - `/status` - show active downloads, active upload, queue, failed count, and local storage usage
 - `/transfers` - show current downloads, current upload, queued items, and retryable failed transfers
 - `/cleanup` - preview removable files in `downloads/`
@@ -117,7 +115,7 @@ Runtime files:
 - `queue/processing.json` - the job currently being uploaded
 - `queue/failed.jsonl` - failed jobs log
 - `queue/cancelled/` - cancellation markers
-- `queue/settings.json` - active Rubika session and destination settings
+- `queue/settings.json` - active Rubika session setting
 
 Cleanup behavior:
 
@@ -164,40 +162,16 @@ Variables:
 - `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
 
 Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
-That lets you switch the active Rubika number/session and destination without editing `.env` or restarting the bot.
+That lets you switch the active Rubika number/session without editing `.env` or restarting the bot.
 
 Changing the Rubika number now happens inside Telegram:
 
-1. Tap `⚙️ Settings` then `📱 Change Rubika Number`, or run `/set_rubika`
+1. Tap `⚙️ Settings` then `📱 Change Account`, or run `/set_rubika`
 2. Send the phone number
 3. Wait for the OTP prompt
 4. Send the OTP code
 
 The bot replaces the existing stored Rubika session after a successful login.
-
-## Finding A Channel GUID
-
-Walrus uploads to Rubika channels using the channel `object_guid`, not a username or public link.
-
-This repository includes a helper script:
-
-```bash
-python3 detect_channel_guid.py
-```
-
-Or with an explicit session:
-
-```bash
-python3 detect_channel_guid.py --session rubsession
-```
-
-How to use it:
-
-1. Run the script on the same server and with the same Rubika session used by Walrus.
-2. Post a message in the target Rubika channel, or wait for a new channel post.
-3. Watch the terminal output.
-4. Copy the printed `CHANNEL GUID` value.
-5. Use that GUID in Telegram bot settings when Walrus asks for the channel target.
 
 How to get your Telegram user ID:
 

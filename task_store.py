@@ -181,16 +181,8 @@ def build_status_text(
 
 def env_runtime_settings() -> dict:
     default_session = os.getenv("RUBIKA_SESSION", "rubika_session").strip() or "rubika_session"
-    default_target_type = os.getenv("RUBIKA_TARGET_TYPE", "saved_messages").strip().lower()
-    default_channel_target = (
-        os.getenv("RUBIKA_CHANNEL", "").strip()
-        or os.getenv("RUBIKA_TARGET", "").strip()
-    )
-
     return {
         "rubika_session": default_session,
-        "rubika_target_type": default_target_type,
-        "rubika_channel_target": default_channel_target,
     }
 
 
@@ -202,37 +194,11 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
         str(settings.get("rubika_session") or defaults["rubika_session"]).strip()
         or defaults["rubika_session"]
     )
-    rubika_target_type = str(
-        settings.get("rubika_target_type") or defaults["rubika_target_type"]
-    ).strip().lower()
-    rubika_channel_target = str(
-        settings.get("rubika_channel_target") or defaults["rubika_channel_target"]
-    ).strip()
-
-    if rubika_target_type == "channel" and rubika_channel_target:
-        rubika_target = rubika_channel_target
-    else:
-        rubika_target_type = "saved_messages"
-        rubika_target = "me"
 
     return {
         "rubika_session": rubika_session,
-        "rubika_target_type": rubika_target_type,
-        "rubika_channel_target": rubika_channel_target,
-        "rubika_target": rubika_target,
+        "rubika_target": "me",
     }
-
-
-def looks_like_rubika_object_guid(value: Optional[str]) -> bool:
-    target = str(value or "").strip()
-    if not target:
-        return False
-
-    invalid_markers = ("@", "/", "\\", "http:", "https:", "rubika.ir", " ", "\t", "\n", ":")
-    if any(marker in target.lower() for marker in invalid_markers):
-        return False
-
-    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{5,}", target))
 
 
 def load_runtime_settings() -> dict:
@@ -253,8 +219,6 @@ def save_runtime_settings(settings: dict) -> dict:
     normalized = normalize_runtime_settings(settings)
     payload = {
         "rubika_session": normalized["rubika_session"],
-        "rubika_target_type": normalized["rubika_target_type"],
-        "rubika_channel_target": normalized["rubika_channel_target"],
     }
     temp_path = SETTINGS_FILE.with_suffix(".tmp")
     temp_path.write_text(
@@ -268,8 +232,6 @@ def save_runtime_settings(settings: dict) -> dict:
 def apply_runtime_settings(task: dict, settings: Optional[dict] = None) -> dict:
     runtime_settings = normalize_runtime_settings(settings or load_runtime_settings())
     task["rubika_session"] = runtime_settings["rubika_session"]
-    task["rubika_target_type"] = runtime_settings["rubika_target_type"]
-    task["rubika_channel_target"] = runtime_settings["rubika_channel_target"]
     task["rubika_target"] = runtime_settings["rubika_target"]
     return task
 

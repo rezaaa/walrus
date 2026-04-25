@@ -37,7 +37,6 @@ from task_store import (
     human_speed,
     find_queued_task,
     is_cancelled,
-    looks_like_rubika_object_guid,
     load_processing,
     load_runtime_settings,
     load_worker_pid,
@@ -75,7 +74,6 @@ app = Client(
 
 ACTIVE_DOWNLOADS: dict[str, dict] = {}
 COMMANDS_READY = False
-PENDING_SETTINGS: dict[int, str] = {}
 AUTH_SETUPS: dict[int, dict] = {}
 BASE_DIR = Path(__file__).resolve().parent
 RUBIKA_AUTH_HELPER = BASE_DIR / "rubika_auth_helper.py"
@@ -115,7 +113,6 @@ BOT_COMMANDS = [
     BotCommand("transfers", "List active and queued transfers"),
     BotCommand("set_rubika", "Start Rubika number setup"),
     BotCommand("use_saved", "Send uploads to Saved Messages"),
-    BotCommand("use_channel", "Send uploads to a Rubika channel"),
     BotCommand("retry", "Retry a failed transfer"),
     BotCommand("retry_all", "Retry all failed transfers"),
     BotCommand("cleanup", "Clean safe download leftovers"),
@@ -207,8 +204,6 @@ def cleanup_keyboard(has_candidates: bool) -> InlineKeyboardMarkup | None:
 
 
 def format_destination_label(settings: dict) -> str:
-    if settings.get("rubika_target_type") == "channel":
-        return f"Channel: {settings.get('rubika_channel_target') or '-'}"
     return "Saved Messages"
 
 
@@ -217,7 +212,6 @@ def settings_action_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("📱 Change Account", callback_data="settings:session")],
             [InlineKeyboardButton("💬 Send To Saved Messages", callback_data="settings:saved")],
-            [InlineKeyboardButton("📢 Send To Channel", callback_data="settings:channel")],
         ]
     )
 
@@ -234,16 +228,11 @@ def build_settings_text(note: str | None = None) -> str:
     lines = [
         "<b>⚙️ Rubika Settings</b>",
         "",
-        "Control which Rubika account receives uploads and where files are sent.",
+        "Control which Rubika account receives uploads.",
         "",
         f"📱 <b>Current Account:</b> {ltr_code(settings['rubika_session'])}",
         f"📬 <b>Current Destination:</b> {ltr_code(destination_label)}",
     ]
-
-    if settings.get("rubika_channel_target"):
-        lines.append(
-            f"📢 <b>Saved Channel GUID:</b> {ltr_code(settings['rubika_channel_target'])}"
-        )
 
     lines.extend(
         [
@@ -251,7 +240,6 @@ def build_settings_text(note: str | None = None) -> str:
             "<b>What Each Button Does</b>",
             "📱 Change Account: log in to a different Rubika number with phone + OTP.",
             "💬 Send To Saved Messages: upload new files to your own Saved Messages.",
-            "📢 Send To Channel: upload to the saved Rubika channel object_guid, or start channel setup if none is saved yet.",
             "",
             "New uploads and retries use the current settings above.",
         ]
@@ -261,14 +249,6 @@ def build_settings_text(note: str | None = None) -> str:
         lines.extend(["", note])
 
     return "\n".join(lines)
-
-
-def clear_pending_setting(chat_id: int) -> None:
-    PENDING_SETTINGS.pop(chat_id, None)
-
-
-def set_pending_setting(chat_id: int, action: str) -> None:
-    PENDING_SETTINGS[chat_id] = action
 
 
 async def send_settings_panel(message: Message, note: str | None = None) -> None:
@@ -371,7 +351,6 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
     stop_auth_process(message.chat.id)
     await cleanup_auth_temp_messages(message.chat.id)
     clear_auth_setup(message.chat.id)
-    clear_pending_setting(message.chat.id)
     setup_id = uuid.uuid4().hex
     AUTH_SETUPS[message.chat.id] = {
         "setup_id": setup_id,
@@ -389,19 +368,6 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
             ]
         ),
         auth_setup_keyboard(),
-    )
-
-
-async def prompt_channel_target_update(message: Message) -> None:
-    set_pending_setting(message.chat.id, "channel")
-    await message.reply_text(
-        "\n".join(
-            [
-                "📢 Send the Rubika channel object_guid you want to upload to.",
-                "Rubpy send_document expects object_guid for channels, not a username or public link.",
-            ]
-        ),
-        reply_markup=MENU_KEYBOARD,
     )
 
 
@@ -443,7 +409,6 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
         clear_auth_setup(message.chat.id)
         return
 
-    clear_pending_setting(message.chat.id)
     stop_auth_process(message.chat.id)
     session_name = load_runtime_settings()["rubika_session"]
     try:
@@ -623,79 +588,11 @@ async def maybe_handle_auth_input(message: Message) -> bool:
 
 
 async def update_saved_messages_setting(message: Message) -> None:
-    save_runtime_settings(
-        {
-            **load_runtime_settings(),
-            "rubika_target_type": "saved_messages",
-        }
-    )
-    clear_pending_setting(message.chat.id)
+    save_runtime_settings(load_runtime_settings())
     await send_settings_panel(
         message,
         note="✅ Upload destination changed to Saved Messages.",
     )
-
-
-async def update_channel_setting(message: Message, channel_target: str) -> None:
-    channel_target = channel_target.strip()
-    if not channel_target:
-        await message.reply_text(
-            "⚠️ Channel target cannot be empty.",
-            reply_markup=MENU_KEYBOARD,
-        )
-        return
-
-    if not looks_like_rubika_object_guid(channel_target):
-        await message.reply_text(
-            "\n".join(
-                [
-                    "⚠️ Please send a Rubika channel object_guid.",
-                    "Usernames and public links are not accepted here because rubpy send_document expects object_guid.",
-                ]
-            ),
-            reply_markup=MENU_KEYBOARD,
-        )
-        return
-
-    save_runtime_settings(
-        {
-            **load_runtime_settings(),
-            "rubika_target_type": "channel",
-            "rubika_channel_target": channel_target,
-        }
-    )
-    clear_pending_setting(message.chat.id)
-    await send_settings_panel(
-        message,
-        note="✅ Upload destination changed to the selected channel.",
-    )
-
-
-async def use_saved_channel_or_prompt(message: Message) -> None:
-    settings = load_runtime_settings()
-    saved_channel_target = (settings.get("rubika_channel_target") or "").strip()
-
-    if saved_channel_target:
-        await update_channel_setting(message, saved_channel_target)
-        return
-
-    await prompt_channel_target_update(message)
-
-
-async def maybe_handle_pending_setting_input(message: Message) -> bool:
-    pending_action = PENDING_SETTINGS.get(message.chat.id)
-    if not pending_action:
-        return False
-
-    text = (message.text or "").strip()
-    if not text:
-        return False
-
-    if pending_action == "channel":
-        await update_channel_setting(message, text)
-        return True
-
-    return False
 
 
 async def send_menu(message: Message) -> None:
@@ -1730,7 +1627,6 @@ async def settings_handler(client: Client, message: Message):
     if not await ensure_authorized_message(message):
         return
     await ensure_bot_commands(client)
-    clear_pending_setting(message.chat.id)
     await send_settings_panel(message)
 
 
@@ -1753,19 +1649,6 @@ async def use_saved_handler(client: Client, message: Message):
         return
     await ensure_bot_commands(client)
     await update_saved_messages_setting(message)
-
-
-@app.on_message(filters.private & filters.command("use_channel"))
-async def use_channel_handler(client: Client, message: Message):
-    if not await ensure_authorized_message(message):
-        return
-    await ensure_bot_commands(client)
-
-    if len(message.command or []) < 2:
-        await use_saved_channel_or_prompt(message)
-        return
-
-    await update_channel_setting(message, " ".join(message.command[1:]))
 
 
 @app.on_message(filters.private & filters.command("status"))
@@ -2024,8 +1907,6 @@ async def settings_callback_handler(client: Client, callback_query: CallbackQuer
         await prompt_rubika_phone_setup(callback_query.message)
     elif action == "saved":
         await update_saved_messages_setting(callback_query.message)
-    elif action == "channel":
-        await use_saved_channel_or_prompt(callback_query.message)
 
 
 @app.on_callback_query(filters.regex(r"^auth:cancel$"))
@@ -2350,9 +2231,6 @@ async def direct_video_url_handler(_client: Client, message: Message):
         return
 
     if not text or text in MENU_BUTTONS or text.startswith("/"):
-        return
-
-    if await maybe_handle_pending_setting_input(message):
         return
 
     urls = extract_direct_urls(text)
