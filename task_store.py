@@ -223,6 +223,18 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
     }
 
 
+def looks_like_rubika_object_guid(value: Optional[str]) -> bool:
+    target = str(value or "").strip()
+    if not target:
+        return False
+
+    invalid_markers = ("@", "/", "\\", "http:", "https:", "rubika.ir", " ", "\t", "\n", ":")
+    if any(marker in target.lower() for marker in invalid_markers):
+        return False
+
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{5,}", target))
+
+
 def load_runtime_settings() -> dict:
     ensure_storage_dirs()
     if not SETTINGS_FILE.exists():

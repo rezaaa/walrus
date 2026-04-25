@@ -175,6 +175,30 @@ Changing the Rubika number now happens inside Telegram:
 
 The bot replaces the existing stored Rubika session after a successful login.
 
+## Finding A Channel GUID
+
+Walrus uploads to Rubika channels using the channel `object_guid`, not a username or public link.
+
+This repository includes a helper script:
+
+```bash
+python3 detect_channel_guid.py
+```
+
+Or with an explicit session:
+
+```bash
+python3 detect_channel_guid.py --session rubsession
+```
+
+How to use it:
+
+1. Run the script on the same server and with the same Rubika session used by Walrus.
+2. Post a message in the target Rubika channel, or wait for a new channel post.
+3. Watch the terminal output.
+4. Copy the printed `CHANNEL GUID` value.
+5. Use that GUID in Telegram bot settings when Walrus asks for the channel target.
+
 How to get your Telegram user ID:
 
 - forward one of your messages to [@userinfobot](https://t.me/userinfobot)

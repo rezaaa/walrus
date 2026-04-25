@@ -37,6 +37,7 @@ from task_store import (
     human_speed,
     find_queued_task,
     is_cancelled,
+    looks_like_rubika_object_guid,
     load_processing,
     load_runtime_settings,
     load_worker_pid,
@@ -214,9 +215,9 @@ def format_destination_label(settings: dict) -> str:
 def settings_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📱 Change Rubika Number", callback_data="settings:session")],
-            [InlineKeyboardButton("💬 Use Saved Messages", callback_data="settings:saved")],
-            [InlineKeyboardButton("📢 Use Channel", callback_data="settings:channel")],
+            [InlineKeyboardButton("📱 Change Account", callback_data="settings:session")],
+            [InlineKeyboardButton("💬 Send To Saved Messages", callback_data="settings:saved")],
+            [InlineKeyboardButton("📢 Send To Channel", callback_data="settings:channel")],
         ]
     )
 
@@ -229,25 +230,30 @@ def auth_setup_keyboard() -> InlineKeyboardMarkup:
 
 def build_settings_text(note: str | None = None) -> str:
     settings = load_runtime_settings()
+    destination_label = format_destination_label(settings)
     lines = [
         "<b>⚙️ Rubika Settings</b>",
         "",
-        f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
-        f"📬 <b>Destination:</b> {ltr_code(format_destination_label(settings))}",
+        "Control which Rubika account receives uploads and where files are sent.",
+        "",
+        f"📱 <b>Current Account:</b> {ltr_code(settings['rubika_session'])}",
+        f"📬 <b>Current Destination:</b> {ltr_code(destination_label)}",
     ]
 
     if settings.get("rubika_channel_target"):
         lines.append(
-            f"📢 <b>Saved Channel Target:</b> {ltr_code(settings['rubika_channel_target'])}"
+            f"📢 <b>Saved Channel GUID:</b> {ltr_code(settings['rubika_channel_target'])}"
         )
 
     lines.extend(
         [
             "",
-            "New uploads and retries will use these settings.",
-            "Tap a button below or use /set_rubika, /use_saved, and /use_channel.",
-            "Changing the Rubika number now asks for a phone number and OTP in Telegram.",
-            "If no channel is saved yet, choosing channel will start channel setup.",
+            "<b>What Each Button Does</b>",
+            "📱 Change Account: log in to a different Rubika number with phone + OTP.",
+            "💬 Send To Saved Messages: upload new files to your own Saved Messages.",
+            "📢 Send To Channel: upload to the saved Rubika channel object_guid, or start channel setup if none is saved yet.",
+            "",
+            "New uploads and retries use the current settings above.",
         ]
     )
 
@@ -282,6 +288,65 @@ async def send_settings_panel_to_chat(chat_id: int, note: str | None = None) -> 
     )
 
 
+def auth_state(chat_id: int) -> dict | None:
+    return AUTH_SETUPS.get(chat_id)
+
+
+def track_auth_temp_message(chat_id: int, message_id: int) -> None:
+    state = auth_state(chat_id)
+    if not state:
+        return
+    temp_message_ids = state.setdefault("temp_message_ids", [])
+    if message_id not in temp_message_ids:
+        temp_message_ids.append(message_id)
+
+
+async def cleanup_auth_temp_messages(chat_id: int) -> None:
+    state = auth_state(chat_id)
+    if not state:
+        return
+
+    temp_message_ids = state.get("temp_message_ids", [])
+    if not temp_message_ids:
+        return
+
+    state["temp_message_ids"] = []
+    try:
+        await app.delete_messages(chat_id, temp_message_ids)
+    except Exception:
+        pass
+
+
+async def cleanup_auth_input_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+async def send_auth_temp_message(
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None,
+) -> Message:
+    sent = await message.reply_text(text, reply_markup=reply_markup)
+    track_auth_temp_message(message.chat.id, sent.id)
+    return sent
+
+
+async def send_auth_temp_message_to_chat(
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None,
+) -> Message | None:
+    try:
+        sent = await app.send_message(chat_id, text, reply_markup=reply_markup)
+    except Exception:
+        return None
+    track_auth_temp_message(chat_id, sent.id)
+    return sent
+
+
 def clear_auth_setup(chat_id: int) -> None:
     AUTH_SETUPS.pop(chat_id, None)
 
@@ -304,6 +369,7 @@ def normalize_phone_number(phone_number: str) -> str:
 
 async def prompt_rubika_phone_setup(message: Message) -> None:
     stop_auth_process(message.chat.id)
+    await cleanup_auth_temp_messages(message.chat.id)
     clear_auth_setup(message.chat.id)
     clear_pending_setting(message.chat.id)
     setup_id = uuid.uuid4().hex
@@ -312,7 +378,8 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
         "stage": "await_phone",
         "session_name": load_runtime_settings()["rubika_session"],
     }
-    await message.reply_text(
+    await send_auth_temp_message(
+        message,
         "\n".join(
             [
                 "📱 Send the Rubika phone number you want to log in with.",
@@ -321,7 +388,7 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
                 "Your current stored Rubika session will be replaced after successful login.",
             ]
         ),
-        reply_markup=auth_setup_keyboard(),
+        auth_setup_keyboard(),
     )
 
 
@@ -330,8 +397,8 @@ async def prompt_channel_target_update(message: Message) -> None:
     await message.reply_text(
         "\n".join(
             [
-                "📢 Send the Rubika channel target you want to upload to.",
-                "You can paste a channel username, link, or GUID supported by your Rubika session.",
+                "📢 Send the Rubika channel object_guid you want to upload to.",
+                "Rubpy send_document expects object_guid for channels, not a username or public link.",
             ]
         ),
         reply_markup=MENU_KEYBOARD,
@@ -345,6 +412,7 @@ async def cancel_auth_setup(message: Message) -> None:
         return
 
     stop_auth_process(message.chat.id)
+    await cleanup_auth_temp_messages(message.chat.id)
     clear_auth_setup(message.chat.id)
     await send_settings_panel(message, note="⚪️ Rubika number setup cancelled.")
 
@@ -355,14 +423,19 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
     normalized_phone = normalize_phone_number(phone_number)
     digits_only = normalized_phone[1:] if normalized_phone.startswith("+") else normalized_phone
     if not digits_only.isdigit() or len(digits_only) < 10:
-        await message.reply_text(
+        await cleanup_auth_input_message(message)
+        await cleanup_auth_temp_messages(message.chat.id)
+        await send_auth_temp_message(
+            message,
             "⚠️ Please send a valid Rubika phone number.",
-            reply_markup=auth_setup_keyboard(),
+            auth_setup_keyboard(),
         )
         return
 
     processing_task = load_processing()
     if processing_task:
+        await cleanup_auth_input_message(message)
+        await cleanup_auth_temp_messages(message.chat.id)
         await send_settings_panel(
             message,
             note="⚠️ Wait for the current upload to finish before changing the Rubika number.",
@@ -384,6 +457,7 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
             bufsize=1,
         )
     except OSError as error:
+        await cleanup_auth_temp_messages(message.chat.id)
         clear_auth_setup(message.chat.id)
         await send_settings_panel(
             message,
@@ -401,9 +475,12 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
     }
 
     asyncio.create_task(monitor_rubika_auth_process(message.chat.id, setup_id, process))
-    await message.reply_text(
+    await cleanup_auth_input_message(message)
+    await cleanup_auth_temp_messages(message.chat.id)
+    await send_auth_temp_message(
+        message,
         "📨 Starting Rubika login and requesting OTP...",
-        reply_markup=auth_setup_keyboard(),
+        auth_setup_keyboard(),
     )
 
 
@@ -415,6 +492,7 @@ async def monitor_rubika_auth_process(chat_id: int, setup_id: str, process) -> N
     if not process or not process.stdout:
         current = AUTH_SETUPS.get(chat_id)
         if current and current.get("setup_id") == setup_id:
+            await cleanup_auth_temp_messages(chat_id)
             clear_auth_setup(chat_id)
         await send_settings_panel_to_chat(
             chat_id,
@@ -446,10 +524,11 @@ async def monitor_rubika_auth_process(chat_id: int, setup_id: str, process) -> N
             ):
                 return
             current["stage"] = "await_otp"
-            await app.send_message(
+            await cleanup_auth_temp_messages(chat_id)
+            await send_auth_temp_message_to_chat(
                 chat_id,
                 "🔐 OTP received. Send the verification code here.",
-                reply_markup=auth_setup_keyboard(),
+                auth_setup_keyboard(),
             )
             continue
 
@@ -477,6 +556,7 @@ async def monitor_rubika_auth_process(chat_id: int, setup_id: str, process) -> N
 
     current = AUTH_SETUPS.get(chat_id)
     if current and current.get("setup_id") == setup_id and current.get("process") is process:
+        await cleanup_auth_temp_messages(chat_id)
         clear_auth_setup(chat_id)
     else:
         return
@@ -513,9 +593,12 @@ async def submit_rubika_otp(message: Message, otp_code: str) -> None:
     process.stdin.write(otp_code.strip() + "\n")
     process.stdin.flush()
     state["stage"] = "verifying_otp"
-    await message.reply_text(
+    await cleanup_auth_input_message(message)
+    await cleanup_auth_temp_messages(message.chat.id)
+    await send_auth_temp_message(
+        message,
         "⏳ Verifying the Rubika OTP...",
-        reply_markup=auth_setup_keyboard(),
+        auth_setup_keyboard(),
     )
 
 
@@ -558,6 +641,18 @@ async def update_channel_setting(message: Message, channel_target: str) -> None:
     if not channel_target:
         await message.reply_text(
             "⚠️ Channel target cannot be empty.",
+            reply_markup=MENU_KEYBOARD,
+        )
+        return
+
+    if not looks_like_rubika_object_guid(channel_target):
+        await message.reply_text(
+            "\n".join(
+                [
+                    "⚠️ Please send a Rubika channel object_guid.",
+                    "Usernames and public links are not accepted here because rubpy send_document expects object_guid.",
+                ]
+            ),
             reply_markup=MENU_KEYBOARD,
         )
         return

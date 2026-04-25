@@ -22,6 +22,7 @@ from task_store import (
     human_duration,
     human_speed,
     is_cancelled,
+    looks_like_rubika_object_guid,
     load_runtime_settings,
     load_processing,
     normalize_runtime_settings,
@@ -435,6 +436,12 @@ def process_task(task: dict) -> None:
     task["rubika_target_type"] = settings["rubika_target_type"]
     task["rubika_channel_target"] = settings["rubika_channel_target"]
     task["rubika_target"] = settings["rubika_target"]
+    if settings["rubika_target_type"] == "channel" and not looks_like_rubika_object_guid(
+        settings["rubika_channel_target"]
+    ):
+        raise RuntimeError(
+            "Rubika channel target must be an object_guid. Usernames and public links are not supported by rubpy send_document."
+        )
     send_path = original_path
     send_name = normalize_upload_filename(task.get("file_name") or original_path.name, original_path.name)
 
