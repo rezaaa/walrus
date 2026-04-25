@@ -8,23 +8,6 @@ This project is shared for research, learning, and personal experimentation.
 Do not use it for abuse, spam, unauthorized access, privacy violations, or any harmful or unlawful purpose.
 You are responsible for using it in a way that respects platform rules, local laws, and other people's rights.
 
-## Inspiration
-
-This project started after a few storage/upload experiments:
-
-- I first tried Arvan OSS as the target, but it was too slow.
-- Then I tried Google Drive, but it got filtered.
-- After that, I found [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub) and used it as the inspiration for trying Rubika instead.
-- The name **Walrus** is inspired by the Black Sails series: Captain Flint's ship, Walrus.
-
-Walrus uses a simple queue-based flow:
-
-1. The Telegram bot receives a video in a private chat, or a direct video file URL in a text message.
-2. The file is downloaded into `downloads/`.
-3. A task is added to `queue/tasks.jsonl`.
-4. The Rubika worker uploads the file.
-5. The Telegram status message is updated during the whole transfer.
-
 ## Features
 
 - Accepts video messages in Telegram private chat
@@ -41,6 +24,142 @@ Walrus uses a simple queue-based flow:
 - Shows total elapsed transfer time on successful uploads
 - Lets you switch the active Rubika number/session from Telegram
 - Uploads videos with their original filename
+
+## Requirements
+
+- Python 3.9+
+- Telegram `API_ID`
+- Telegram `API_HASH`
+- Telegram bot token
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/rezaaa/walrus.git
+cd walrus
+cp .env.example .env
+```
+
+## Configuration
+
+Edit `.env` in the project root:
+
+```env
+API_ID=your_telegram_api_id
+API_HASH=your_telegram_api_hash
+BOT_TOKEN=your_telegram_bot_token
+RUBIKA_SESSION=rubsession
+OWNER_TELEGRAM_ID=123456789
+```
+
+Variables:
+
+- `API_ID` - from https://my.telegram.org
+- `API_HASH` - from https://my.telegram.org
+- `BOT_TOKEN` - from BotFather
+- `RUBIKA_SESSION` - session name or path used by `rubpy`
+- `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
+
+Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
+That lets you switch the active Rubika number/session without editing `.env` or restarting the bot.
+
+How to get your Telegram user ID:
+
+- forward one of your messages to [@userinfobot](https://t.me/userinfobot)
+- or message [@RawDataBot](https://t.me/RawDataBot) and use the value in `from.id`
+
+Then put that number into `.env` as `OWNER_TELEGRAM_ID`.
+If you leave it unset, the bot stays open for everyone.
+
+## Setup
+
+Walrus uses Telegram for Rubika account setup.
+
+After the app is running, open the Telegram bot and send:
+
+```text
+/start
+```
+
+If no saved Rubika session exists yet, the bot will guide you through setup and create the session file automatically.
+
+Account setup and account changes work like this:
+
+1. Send `/start` for first setup, or open `⚙️ Settings`
+2. Tap `📱 Change Account` or run `/set_rubika`
+3. Send the Rubika phone number
+4. If Rubika asks for an account password, send it in the bot
+5. Wait for the OTP prompt
+6. Send the OTP code
+
+After a successful login, the current Rubika session is replaced and reused by the worker for future uploads.
+
+`rubpy` stores the authenticated session on disk using the configured `RUBIKA_SESSION` name. With current versions of `rubpy`, that is typically a `.rp` file such as `rubsession.rp`.
+
+## Install on Server With Script
+
+Install the system packages once:
+
+```bash
+apt update && apt install -y git python3 python3-venv screen
+```
+
+Clone Walrus and configure `.env`:
+
+```bash
+cd /opt
+git clone https://github.com/rezaaa/walrus.git
+cd /opt/walrus
+cp .env.example .env
+nano .env
+```
+
+Run the setup script:
+
+```bash
+bash update.sh
+```
+
+`update.sh` creates `venv/` if needed, installs dependencies, stops any old `walrus` screen session, and starts the app in a new screen session.
+
+Verify or attach to the running app:
+
+```bash
+screen -ls
+screen -r walrus
+```
+
+Then open the Telegram bot and finish Rubika setup with `/start`. Detach from screen without stopping the app with `Ctrl + A`, then `D`.
+
+## Update
+
+Use the same script for later updates:
+
+```bash
+cd /opt/walrus
+bash update.sh
+```
+
+The script updates the code, refreshes dependencies, restarts the `screen` session, and keeps the same `.env`.
+
+## Run Manually
+
+If you do not want to use `screen` or `update.sh`:
+
+```bash
+cd walrus
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+This starts:
+
+- `telegram_bot.py` - Telegram receiver and downloader
+- `rubika_worker.py` - Rubika upload worker
 
 ## Bot Controls
 
@@ -127,149 +246,6 @@ Cleanup behavior:
 - canceled task: local file is deleted
 - failed upload: local file is kept
 
-## Requirements
-
-- Python 3.9+
-- Telegram `API_ID`
-- Telegram `API_HASH`
-- Telegram bot token
-- Valid Rubika session support through `rubpy`
-
----
-
-## 🛠 Installation
-
-```bash
-git clone https://github.com/rezaaa/walrus.git
-cd walrus
-pip install -r requirements.txt
-```
-
-## Configuration
-
-Create `.env` in the project root:
-
-```env
-API_ID=your_telegram_api_id
-API_HASH=your_telegram_api_hash
-BOT_TOKEN=your_telegram_bot_token
-RUBIKA_SESSION=rubsession
-OWNER_TELEGRAM_ID=123456789
-```
-
-Variables:
-
-- `API_ID` - from https://my.telegram.org
-- `API_HASH` - from https://my.telegram.org
-- `BOT_TOKEN` - from BotFather
-- `RUBIKA_SESSION` - session name or path used by `rubpy`
-- `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
-
-Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
-That lets you switch the active Rubika number/session without editing `.env` or restarting the bot.
-
-How to get your Telegram user ID:
-
-- forward one of your messages to [@userinfobot](https://t.me/userinfobot)
-- or message [@RawDataBot](https://t.me/RawDataBot) and use the value in `from.id`
-
-Then put that number into `.env` as `OWNER_TELEGRAM_ID`.
-If you leave it unset, the bot stays open for everyone.
-
-## Rubika Login Flow
-
-Rubika account setup happens completely in the Telegram bot UI. There is no terminal login step.
-
-On first setup, send `/start`. If no saved Rubika session exists yet, the bot will guide you through phone + OTP login and create the session file automatically.
-
-Account setup and account changes work like this:
-
-1. Send `/start` for first setup, or open `⚙️ Settings`
-2. Tap `📱 Change Account` or run `/set_rubika`
-3. Send the Rubika phone number
-4. If Rubika asks for an account password, send it in the bot
-5. Wait for the OTP prompt
-6. Send the OTP code
-
-After a successful login, the current Rubika session is replaced and reused by the worker for future uploads.
-
-`rubpy` stores the authenticated session on disk using the configured `RUBIKA_SESSION` name. With current versions of `rubpy`, that is typically a `.rp` file such as `rubsession.rp`.
-
-## First Run
-
-If the configured Rubika session does not exist yet, open the Telegram bot and send:
-
-```text
-/start
-```
-
-The bot UI will ask for:
-
-1. Your Rubika phone number
-2. Your Rubika account password, only if Rubika requires it
-3. The OTP code sent by Rubika
-
-After successful OTP verification, the bot creates the configured Rubika session file, usually `rubsession.rp`, and reuses it unless you later replace it from Telegram.
-
-## Server Setup With Script
-
-Install the system packages once:
-
-```bash
-apt update && apt install -y git python3 python3-venv screen
-```
-
-Clone Walrus and configure `.env`:
-
-```bash
-cd /opt
-git clone https://github.com/rezaaa/walrus.git
-cd /opt/walrus
-cp .env.example .env
-nano .env
-```
-
-Run the setup/update script:
-
-```bash
-bash update.sh
-```
-
-`update.sh` creates `venv/` if needed, installs dependencies, stops any old `walrus` screen session, and starts the app in a new screen session.
-
-Verify or attach to the running app:
-
-```bash
-screen -ls
-screen -r walrus
-```
-
-First-time Rubika account setup happens in the Telegram bot UI with `/start`, not in the terminal. Detach from screen without stopping the app with `Ctrl + A`, then `D`.
-
-## Update on Server
-
-Use the same script for updates:
-
-```bash
-cd /opt/walrus
-bash update.sh
-```
-
-## Run Manually
-
-If you do not want to use screen:
-
-```bash
-cd /opt/walrus
-source venv/bin/activate
-python main.py
-```
-
-This starts:
-
-- `telegram_bot.py` - Telegram receiver and downloader
-- `rubika_worker.py` - Rubika upload worker
-
 ## Troubleshooting
 
 If the bot does not start:
@@ -284,3 +260,20 @@ If uploads fail:
 - review `queue/failed.jsonl`
 - confirm the file still exists in `downloads/`
 - check server memory and swap if the process was killed
+
+## Inspiration
+
+This project started after a few storage/upload experiments:
+
+- I first tried Arvan OSS as the target, but it was too slow.
+- Then I tried Google Drive, but it got filtered.
+- After that, I found [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub) and used it as the inspiration for trying Rubika instead.
+- The name **Walrus** is inspired by the Black Sails series: Captain Flint's ship, Walrus.
+
+Walrus uses a simple queue-based flow:
+
+1. The Telegram bot receives a video in a private chat, or a direct video file URL in a text message.
+2. The file is downloaded into `downloads/`.
+3. A task is added to `queue/tasks.jsonl`.
+4. The Rubika worker uploads the file.
+5. The Telegram status message is updated during the whole transfer.
