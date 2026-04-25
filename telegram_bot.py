@@ -298,17 +298,6 @@ async def cleanup_auth_input_message(message: Message) -> None:
         pass
 
 
-async def cleanup_auth_origin_message(message: Message) -> None:
-    from_user = getattr(message, "from_user", None)
-    if not getattr(from_user, "is_bot", False):
-        return
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
 async def send_auth_temp_message(
     message: Message,
     text: str,
@@ -356,7 +345,6 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
     stop_auth_process(message.chat.id)
     await cleanup_auth_temp_messages(message.chat.id)
     clear_auth_setup(message.chat.id)
-    await cleanup_auth_origin_message(message)
     setup_id = uuid.uuid4().hex
     AUTH_SETUPS[message.chat.id] = {
         "setup_id": setup_id,
@@ -443,7 +431,6 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
         "phone_number": normalized_phone,
         "process": process,
         "log_tail": [],
-        "temp_message_ids": list(existing_state.get("temp_message_ids", [])),
     }
 
     asyncio.create_task(monitor_rubika_auth_process(message.chat.id, setup_id, process))
@@ -499,12 +486,7 @@ async def monitor_rubika_auth_process(chat_id: int, setup_id: str, process) -> N
             await cleanup_auth_temp_messages(chat_id)
             await send_auth_temp_message_to_chat(
                 chat_id,
-                "\n".join(
-                    [
-                        "🔐 Verification code requested.",
-                        "When the OTP arrives on your phone, send it here.",
-                    ]
-                ),
+                "🔐 OTP received. Send the verification code here.",
                 auth_setup_keyboard(),
             )
             continue
@@ -527,7 +509,7 @@ async def monitor_rubika_auth_process(chat_id: int, setup_id: str, process) -> N
                         "🔐 Rubika is waiting for verification input.",
                         prompt_text,
                         "",
-                        "When the code arrives, send it here.",
+                        "Send the requested code here.",
                     ]
                 ),
                 auth_setup_keyboard(),

@@ -54,11 +54,15 @@ class CancelledTaskError(RuntimeError):
 
 
 def has_session(session_name: str) -> bool:
-    candidates = [
+    candidates: list[Path] = []
+    for path in (
         Path(session_name),
+        Path(f"{session_name}.rp"),
         Path(f"{session_name}.session"),
         Path(f"{session_name}.sqlite"),
-    ]
+    ):
+        if path not in candidates:
+            candidates.append(path)
     return any(path.exists() for path in candidates)
 
 
